@@ -1,45 +1,42 @@
-# JIRA Integration Skill
+# Jira Integration Skill
 
-Manage JIRA tickets without leaving your terminal or editor. Built as an AI agent skill for Cursor and Codex, but works standalone too.
+Manage Jira tickets without leaving your terminal or editor. Built as an AI agent skill for Cursor and Codex.
 
-## What It Does
+**Two interfaces:**
 
-Bidirectional sync between a local `JIRA_TODO.md` file and your JIRA board. Mark tickets done locally, sync pushes to JIRA. New tickets in JIRA get pulled into your TODO. One command.
-
-Plus: create tickets, bulk operations, search, git-branch linking, and sprint reports — all from the terminal.
-
-## Scripts
-
-### Single Ticket Operations
-
-| Script | What it does |
-|--------|-------------|
-| `create-one-jira-ticket.sh` | Create a single ticket (story, task, subtask, bug) |
-| `update-one-jira-ticket.sh` | Transition status or add a comment |
-| `view-one-jira-ticket.sh` | View ticket details in terminal (no browser needed) |
-
-### Bulk Operations
-
-| Script | What it does |
-|--------|-------------|
-| `bulk-create-jira-tickets.sh` | Create multiple tickets at once, supports `--parent` for batch sub-tasks |
-| `bulk-update-jira-tickets.sh` | Transition multiple tickets in one go |
-
-### Workflows
-
-| Script | What it does |
-|--------|-------------|
-| `sync-jira-tickets.sh` | Bidirectional sync: push local completions, pull fresh JIRA state |
-| `check-jira-setup.sh` | Verify credentials, auth, and project access |
-| `search-jira-tickets.sh` | JQL search with shortcuts (`mine`, `sprint`, `recent`, `bugs`) |
-| `link-git-to-jira-ticket.sh` | Link git branch and commits to a JIRA ticket |
-| `jira-sprint-report.sh` | Sprint progress with progress bar and stale ticket warnings |
+1. **Atlassian MCP Server** — Real-time single operations via the official [Atlassian Rovo MCP Server](https://github.com/atlassian/atlassian-mcp-server) with OAuth 2.1
+2. **Python Batch Scripts** — Parallel bulk operations via asyncio + aiohttp
 
 ## Setup
 
-### 1. Environment Variables
+### 1. MCP Server (for Cursor/IDE)
 
-Add to your `~/.zshrc` or `~/.bashrc`:
+The project includes `.mcp.json` which configures the official Atlassian Rovo MCP server:
+
+```json
+{
+  "servers": {
+    "Atlassian-MCP-Server": {
+      "url": "https://mcp.atlassian.com/v1/mcp"
+    }
+  }
+}
+```
+
+**Prerequisites:**
+- Atlassian Cloud site with Jira
+- Node.js v18+ (for `mcp-remote` proxy on older Cursor versions)
+- Browser for OAuth 2.1 login
+
+On first use, your browser opens for OAuth authentication. The MCP server respects your existing Jira permissions.
+
+### 2. Python Batch Scripts (for Bulk Operations)
+
+```bash
+uv sync
+```
+
+Environment variables in `~/.zshrc` or `~/.bashrc`:
 
 ```bash
 export JIRA_USER="your-email@company.com"
@@ -50,74 +47,144 @@ export JIRA_PROJECT_KEY="PROJ"
 
 Get your API token at: https://id.atlassian.com/manage-profile/security/api-tokens
 
-### 2. Verify Setup
+**Optional configuration:**
 
 ```bash
-./scripts/check-jira-setup.sh
-```
-
-### 3. Optional Configuration
-
-```bash
-export JIRA_STORY_TYPE_ID="10001"       # Issue type IDs (vary per project)
+export JIRA_ACCOUNT_ID="your-account-id"
+export JIRA_STORY_TYPE_ID="10001"
 export JIRA_SUBTASK_TYPE_ID="10003"
-export JIRA_COMPONENT_ID=""              # If your project requires components
-export JIRA_SPRINT_ID=""                 # Current sprint ID
+export JIRA_TASK_TYPE_ID="10002"
+export JIRA_BUG_TYPE_ID="10004"
+export JIRA_COMPONENT_ID=""
+export JIRA_SPRINT_ID=""
 export JIRA_SPRINT_FIELD="customfield_10020"
 ```
 
-Use the discovery commands in `SKILL.md` to find your project-specific IDs.
+## Python Batch Scripts
 
-## Quick Start
+All batch scripts are in `scripts/batch/` and use asyncio for parallel execution.
+
+### Batch Create
 
 ```bash
-# Sync JIRA tickets to local TODO file (and push any local completions back)
-./scripts/sync-jira-tickets.sh
+# Create multiple stories
+uv run python scripts/batch/batch_create.py --type story "Implement auth" "Add logging" "Write tests"
 
-# View a ticket
-./scripts/view-one-jira-ticket.sh PROJ-123
+# Sub-tasks under a parent
+uv run python scripts/batch/batch_create.py --type subtask --parent PROJ-100 "Unit tests" "Integration tests"
 
-# Search
-./scripts/search-jira-tickets.sh mine
+# From JSON file
+uv run python scripts/batch/batch_create.py --file tickets.json
 
-# Create a ticket
-./scripts/create-one-jira-ticket.sh "Fix authentication bug" "Login fails for SSO users" bug
+# From JSON stdin
+echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin
+```
 
-# Create batch sub-tasks
-./scripts/bulk-create-jira-tickets.sh --type subtask --parent PROJ-100 "Write tests" "Update docs"
+### Batch Update
 
-# Link your current git branch to a JIRA ticket
-./scripts/link-git-to-jira-ticket.sh
+```bash
+# Transition multiple tickets to Done
+uv run python scripts/batch/batch_update.py --transition done PROJ-101 PROJ-102 PROJ-103
 
-# Sprint progress
-./scripts/jira-sprint-report.sh
+# Add comment to multiple tickets
+uv run python scripts/batch/batch_update.py --comment "Deployed to staging" PROJ-101 PROJ-102
+
+# Combined
+uv run python scripts/batch/batch_update.py --transition done --comment "Sprint 5" PROJ-101 PROJ-102
+```
+
+### Batch Search
+
+```bash
+# Shortcut queries (run in parallel)
+uv run python scripts/batch/batch_search.py mine sprint bugs recent
+
+# Custom JQL
+uv run python scripts/batch/batch_search.py "priority=High AND status!=Done"
+
+# JSON output
+uv run python scripts/batch/batch_search.py --json-output mine sprint
+```
+
+**Shortcuts:** `mine`, `sprint`, `recent`, `bugs`, `done`, `blocked`, `high`, `unassigned`
+
+### Sprint Sync
+
+Bidirectional sync between `JIRA_TODO.md` and Jira:
+
+```bash
+# Full sync (push local completions + pull fresh state)
+uv run python scripts/batch/sprint_sync.py
+
+# Pull only
+uv run python scripts/batch/sprint_sync.py --pull-only
+
+# Push only
+uv run python scripts/batch/sprint_sync.py --push-only
+```
+
+### Sprint Report
+
+```bash
+# Pretty-printed report with progress bar
+uv run python scripts/batch/sprint_report.py
+
+# Flag stale after 5 days
+uv run python scripts/batch/sprint_report.py --stale-days 5
+
+# JSON output
+uv run python scripts/batch/sprint_report.py --json-output
 ```
 
 ## How Bidirectional Sync Works
 
 ```
-JIRA Board                          JIRA_TODO.md
-┌──────────┐    sync-jira-tickets   ┌──────────────┐
-│ PROJ-101 │ ◄────────────────────  │ [x] PROJ-101 │  (you marked it done locally)
-│ PROJ-102 │ ──────────────────►    │ [ ] PROJ-102 │  (new ticket pulled from JIRA)
-│ PROJ-103 │ ──────────────────►    │ [x] PROJ-103 │  (already done in JIRA)
+Jira Board                          JIRA_TODO.md
+┌──────────┐    sprint_sync.py      ┌──────────────┐
+│ PROJ-101 │ <--------------------  │ [x] PROJ-101 │  (you marked done locally)
+│ PROJ-102 │ -------------------->  │ [ ] PROJ-102 │  (new ticket pulled)
+│ PROJ-103 │ -------------------->  │ [x] PROJ-103 │  (already done in Jira)
 └──────────┘                        └──────────────┘
 ```
 
-One command. Push completions up, pull new state down.
+One command. Push completions up, pull new state down. All API calls run concurrently.
 
-## Using as an AI Agent Skill
+## Skills
 
-This was built as a skill for AI coding agents (Cursor, Codex). The `SKILL.md` file contains the full agent-facing documentation with guidelines on when and how to use each script.
+The `skills/` directory contains specialized agent workflows for complex multi-step Jira operations:
 
-To install as a Cursor skill, copy the `jira-integration/` directory to your skills folder and reference `SKILL.md`.
+| Skill | What it does |
+|-------|-------------|
+| `capture-tasks-from-meeting-notes` | Parse meeting notes, extract action items, create Jira tasks with assignees |
+| `spec-to-backlog` | Convert specs/requirements into Epic + child tickets |
+| `triage-issue` | Search for duplicate bugs, create or comment on issues |
+| `generate-status-report` | Query Jira, analyze data, format status reports |
+
+Each skill directory contains a `SKILL.md` with full workflow documentation for AI agents. The main `SKILL.md` at the project root acts as an orchestrator that routes requests to the appropriate sub-skill.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│  AI Agent (Cursor / Codex)                          │
+│                                                     │
+│  Orchestrator SKILL.md                              │
+│    │                                                │
+│    ├─ Single ops ──> Atlassian MCP Server (OAuth)   │
+│    │                      │                         │
+│    ├─ Bulk ops ───> Python Batch Scripts (asyncio)   │
+│    │                      │                         │
+│    └─ Workflows ──> Sub-Skills (skills/*.md)         │
+│                           │                         │
+│                      Jira Cloud REST API            │
+└─────────────────────────────────────────────────────┘
+```
 
 ## Requirements
 
-- `bash`
-- `curl`
-- `python3`
-- JIRA Cloud instance with API access
+- Python 3.11+ with [uv](https://docs.astral.sh/uv/) package manager
+- Jira Cloud instance with API access
+- Node.js v18+ (for MCP proxy on older IDE versions)
 
 ## License
 
