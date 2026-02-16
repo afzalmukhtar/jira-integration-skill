@@ -1,85 +1,43 @@
 #!/usr/bin/env python3
-"""Batch-create Jira issues in parallel.
+"""Batch-create Jira issues in parallel via MCP.
 
 Usage:
-    # From CLI arguments (one summary per arg):
-    python batch_create.py --type story "Implement auth" "Add logging" "Write tests"
+    # From CLI arguments:
+    uv run python scripts/batch/batch_create.py --type story "Implement auth" "Add logging"
 
-    # With a parent for sub-tasks:
-    python batch_create.py --type subtask --parent PROJ-100 "Unit tests" "Integration tests"
+    # Sub-tasks under a parent:
+    uv run python scripts/batch/batch_create.py --type subtask --parent PROJ-100 "Unit tests" "Docs"
 
-    # From JSON stdin (full control):
-    echo '[{"summary":"Task A","description":"Details"},{"summary":"Task B"}]' | python batch_create.py --stdin
+    # From JSON stdin:
+    echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin
 
     # From a file:
-    python batch_create.py --file tickets.json
+    uv run python scripts/batch/batch_create.py --file tickets.json
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import sys
 from pathlib import Path
 
-from jira_client import JiraClient, JiraConfig, run_async
-
-
-async def batch_create(
-    client: JiraClient,
-    tickets: list[dict],
-    issue_type_id: str,
-    parent_key: str = "",
-) -> list[dict]:
-    """Create multiple issues concurrently. Returns list of results."""
-
-    async def _create_one(ticket: dict) -> dict:
-        summary = ticket.get("summary", "")
-        description = ticket.get("description", "")
-        try:
-            payload = client.build_issue_payload(
-                summary,
-                issue_type_id=issue_type_id,
-                description=description,
-                parent_key=parent_key,
-            )
-            result = await client.create_issue(payload)
-            key = result.get("key", "???")
-            print(f"  Created {key} — {summary}")
-            return {"key": key, "summary": summary, "status": "created"}
-        except Exception as exc:
-            print(f"  FAILED — {summary}: {exc}", file=sys.stderr)
-            return {"key": None, "summary": summary, "status": "failed", "error": str(exc)}
-
-    tasks = [_create_one(t) for t in tickets]
-    return await asyncio.gather(*tasks)
-
-
-def resolve_type_id(config: JiraConfig, type_name: str) -> str:
-    """Map a friendly type name to the configured type ID."""
-    mapping = {
-        "story": config.story_type_id,
-        "task": config.task_type_id,
-        "subtask": config.subtask_type_id,
-        "sub-task": config.subtask_type_id,
-        "bug": config.bug_type_id,
-    }
-    return mapping.get(type_name.lower(), config.task_type_id)
+from mcp_client import MCPPool, MCPToolError, run_async
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Batch-create Jira issues in parallel")
+    parser = argparse.ArgumentParser(description="Batch-create Jira issues via MCP")
     parser.add_argument("summaries", nargs="*", help="Issue summaries (one per arg)")
-    parser.add_argument("--type", default="task", help="Issue type: story|task|subtask|bug (default: task)")
+    parser.add_argument("--type", default="Task", help="Issue type name: Story|Task|Sub-task|Bug (default: Task)")
     parser.add_argument("--parent", default="", help="Parent issue key for sub-tasks")
     parser.add_argument("--stdin", action="store_true", help="Read JSON array from stdin")
     parser.add_argument("--file", type=str, help="Read JSON array from a file")
     parser.add_argument("--description", default="", help="Default description for CLI-arg tickets")
+    parser.add_argument("--project", default="", help="Project key override (default: JIRA_PROJECT_KEY env)")
+    parser.add_argument("--concurrency", type=int, default=3, help="Parallel sessions (default: 3)")
     parser.add_argument("--json-output", action="store_true", help="Output results as JSON")
     args = parser.parse_args()
 
-    # Build ticket list
     tickets: list[dict] = []
     if args.stdin:
         tickets = json.load(sys.stdin)
@@ -95,19 +53,49 @@ async def main() -> None:
         print("No tickets to create.", file=sys.stderr)
         sys.exit(1)
 
-    config = JiraConfig.from_env()
-    type_id = resolve_type_id(config, args.type)
+    concurrency = min(args.concurrency, len(tickets))
+    print(f"Creating {len(tickets)} {args.type}(s) via MCP ({concurrency} parallel sessions)...")
 
-    print(f"Creating {len(tickets)} {args.type}(s) in {config.project_key}...")
-    if args.parent:
-        print(f"  Parent: {args.parent}")
+    async with MCPPool(concurrency=concurrency) as pool:
+        cid = await pool.cloud_id()
+        project = args.project or pool._queue._queue[0].project_key
 
-    async with JiraClient(config=config) as client:
-        results = await batch_create(client, tickets, type_id, args.parent)
+        if not project:
+            print("ERROR: Set JIRA_PROJECT_KEY env var or use --project.", file=sys.stderr)
+            sys.exit(1)
+
+        if args.parent:
+            print(f"  Parent: {args.parent}")
+
+        call_args = []
+        for t in tickets:
+            kwargs = {
+                "cloudId": cid,
+                "projectKey": project,
+                "issueTypeName": args.type,
+                "summary": t.get("summary", ""),
+            }
+            if t.get("description"):
+                kwargs["description"] = t["description"]
+            if args.parent:
+                kwargs["parent"] = args.parent
+            call_args.append(kwargs)
+
+        raw_results = await pool.map("createJiraIssue", call_args)
+
+    results = []
+    for i, r in enumerate(raw_results):
+        summary = tickets[i].get("summary", "")
+        if isinstance(r, Exception):
+            print(f"  FAILED — {summary}: {r}", file=sys.stderr)
+            results.append({"key": None, "summary": summary, "status": "failed", "error": str(r)})
+        else:
+            key = r.get("key", "???") if isinstance(r, dict) else str(r)
+            print(f"  Created {key} — {summary}")
+            results.append({"key": key, "summary": summary, "status": "created"})
 
     created = sum(1 for r in results if r["status"] == "created")
     failed = sum(1 for r in results if r["status"] == "failed")
-
     print(f"\n=== Summary ===")
     print(f"  Created: {created}")
     print(f"  Failed:  {failed}")
@@ -115,7 +103,6 @@ async def main() -> None:
 
     if args.json_output:
         print(json.dumps(results, indent=2))
-
     if failed:
         sys.exit(1)
 

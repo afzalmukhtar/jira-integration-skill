@@ -4,5 +4,5 @@ version = "0.1.0"
 description = "Manage Jira tickets via Atlassian MCP server and async Python batch scripts"
 requires-python = ">=3.11"
 dependencies = [
-    "aiohttp>=3.13.3",
+    "mcp>=1.26.0",
 ]

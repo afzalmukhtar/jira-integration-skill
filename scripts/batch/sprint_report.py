@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
-"""Async sprint report generation.
+"""Sprint report generation via MCP.
 
-Queries Jira for sprint data and produces a formatted progress report with:
-  - Progress bar
-  - Status breakdown (Done / In Progress / To Do)
-  - In-progress and to-do ticket details with assignees
-  - Stale ticket warnings (no update in 3+ days)
+Queries Jira for sprint data and produces a formatted progress report.
 
 Usage:
-    python sprint_report.py
-    python sprint_report.py --stale-days 5
-    python sprint_report.py --json-output
+    uv run python scripts/batch/sprint_report.py
+    uv run python scripts/batch/sprint_report.py --stale-days 5
+    uv run python scripts/batch/sprint_report.py --json-output
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
+import os
 import sys
 from datetime import datetime, timezone
 
-from jira_client import JiraClient, JiraConfig, run_async
+from mcp_client import mcp_session, run_async
 
 DONE_STATUSES = {"done", "closed", "resolved"}
 IN_PROGRESS_STATUSES = {"in progress", "in review", "in development"}
@@ -51,47 +47,48 @@ def progress_bar(done: int, total: int, width: int = 30) -> str:
         return "[" + " " * width + "] 0%"
     pct = done / total
     filled = int(width * pct)
-    bar = "█" * filled + "░" * (width - filled)
+    bar = "\u2588" * filled + "\u2591" * (width - filled)
     return f"[{bar}] {pct:.0%}"
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Jira sprint progress report")
-    parser.add_argument("--stale-days", type=int, default=3, help="Days without update to flag as stale (default: 3)")
+    parser = argparse.ArgumentParser(description="Jira sprint report via MCP")
+    parser.add_argument("--stale-days", type=int, default=3, help="Days without update to flag as stale")
     parser.add_argument("--json-output", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
-    config = JiraConfig.from_env()
-    if not config.project_key:
+    project_key = os.environ.get("JIRA_PROJECT_KEY", "")
+    base_url = os.environ.get("JIRA_BASE_URL", "")
+    if not project_key:
         print("ERROR: JIRA_PROJECT_KEY must be set.", file=sys.stderr)
         sys.exit(1)
 
     jql = (
-        f"project={config.project_key} "
+        f"project={project_key} "
         f"AND sprint in openSprints() "
         f"ORDER BY rank"
     )
 
-    async with JiraClient(config=config) as client:
-        data = await client.search(
-            jql,
-            fields="key,summary,status,issuetype,assignee,priority,updated",
-            max_results=200,
+    async with mcp_session() as ctx:
+        cid = await ctx.cloud_id()
+        data = await ctx.call(
+            "searchJiraIssuesUsingJql",
+            cloudId=cid,
+            jql=jql,
+            fields=["key", "summary", "status", "issuetype", "assignee", "priority", "updated"],
+            maxResults=200,
         )
 
-    issues = data.get("issues", [])
+    issues = data.get("issues", []) if isinstance(data, dict) else []
     if not issues:
         print("No issues found in the current sprint.")
         return
 
-    done_list: list[dict] = []
-    in_progress_list: list[dict] = []
-    todo_list: list[dict] = []
-    stale_list: list[dict] = []
+    done_list, in_progress_list, todo_list, stale_list = [], [], [], []
 
     for issue in issues:
-        f = issue["fields"]
-        key = issue["key"]
+        f = issue.get("fields", {})
+        key = issue.get("key", "")
         summary = f.get("summary", "")
         status = f.get("status", {}).get("name", "Unknown")
         assignee = (f.get("assignee") or {}).get("displayName", "Unassigned")
@@ -100,14 +97,10 @@ async def main() -> None:
         stale_days_val = days_since(updated)
 
         entry = {
-            "key": key,
-            "summary": summary,
-            "status": status,
-            "assignee": assignee,
-            "priority": priority,
-            "updated": updated,
-            "stale_days": stale_days_val,
-            "url": f"{config.base_url}/browse/{key}",
+            "key": key, "summary": summary, "status": status,
+            "assignee": assignee, "priority": priority,
+            "updated": updated, "stale_days": stale_days_val,
+            "url": f"{base_url}/browse/{key}" if base_url else key,
         }
 
         status_lower = status.lower()
@@ -129,22 +122,16 @@ async def main() -> None:
 
     if args.json_output:
         report = {
-            "total": total,
-            "done": done_count,
-            "in_progress": ip_count,
-            "todo": todo_count,
-            "stale": len(stale_list),
+            "total": total, "done": done_count, "in_progress": ip_count,
+            "todo": todo_count, "stale": len(stale_list),
             "progress_pct": round(done_count / total * 100, 1) if total else 0,
-            "done_issues": done_list,
-            "in_progress_issues": in_progress_list,
-            "todo_issues": todo_list,
-            "stale_issues": stale_list,
+            "done_issues": done_list, "in_progress_issues": in_progress_list,
+            "todo_issues": todo_list, "stale_issues": stale_list,
         }
         print(json.dumps(report, indent=2))
         return
 
-    # Pretty print
-    print(f"=== Sprint Report: {config.project_key} ===")
+    print(f"=== Sprint Report: {project_key} ===")
     print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print()
     print(f"Progress: {progress_bar(done_count, total)}")
@@ -176,7 +163,6 @@ async def main() -> None:
         print(f"\n--- Completed ({done_count}) ---")
         for e in done_list:
             print(f"  [{e['key']}] {e['summary'][:60]}")
-
     print()
 
 

@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
-"""Bidirectional sync between JIRA_TODO.md and Jira (async version).
+"""Bidirectional sync between JIRA_TODO.md and Jira via MCP.
 
-Phase 1 - Push: Read locally completed tickets ([x]) and transition to Done in Jira.
+Phase 1 - Push: Read locally completed tickets ([x]), tell agent to transition.
 Phase 2 - Pull: Fetch sprint tickets from Jira and regenerate JIRA_TODO.md.
 
-All API calls within each phase run concurrently.
-
 Usage:
-    python sprint_sync.py                        # default: ./JIRA_TODO.md
-    python sprint_sync.py --file path/to/TODO.md
-    python sprint_sync.py --pull-only            # skip push, just pull
-    python sprint_sync.py --push-only            # skip pull, just push
+    uv run python scripts/batch/sprint_sync.py
+    uv run python scripts/batch/sprint_sync.py --pull-only
+    uv run python scripts/batch/sprint_sync.py --push-only
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
+import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from jira_client import JiraClient, JiraConfig, run_async
+from mcp_client import MCPPool, mcp_session, run_async
 
 TICKET_RE = re.compile(r"- \[([x ])\] \[([A-Z]+-\d+)\]")
 HEADER_RE = re.compile(r"## \[([x ])\] \[([A-Z]+-\d+)\]")
@@ -30,7 +27,7 @@ DONE_STATUSES = {"done", "closed", "resolved"}
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Push local completions to Jira
+# Phase 1: Push local completions
 # ---------------------------------------------------------------------------
 
 
@@ -45,34 +42,38 @@ def parse_completed_tickets(todo_path: Path, project_key: str) -> list[str]:
             checked, key = match.group(1), match.group(2)
             if checked == "x" and key.startswith(f"{project_key}-"):
                 completed.append(key)
-    return list(dict.fromkeys(completed))  # deduplicate preserving order
+    return list(dict.fromkeys(completed))
 
 
-async def push_completion(client: JiraClient, key: str) -> dict:
-    """Transition a single ticket to Done (skip if already done)."""
-    try:
-        issue = await client.get_issue(key)
-        current = issue["fields"]["status"]["name"].lower()
-        if current in DONE_STATUSES:
-            print(f"  {key}: already {current}")
-            return {"key": key, "status": "already_done"}
+async def push_completions(pool: MCPPool, cid: str, keys: list[str]) -> list[dict]:
+    """Add a 'marked as done' comment to completed tickets.
 
-        tid = await client.find_transition_id(key, "Done")
-        if not tid:
-            print(f"  {key}: no 'Done' transition available", file=sys.stderr)
-            return {"key": key, "status": "no_transition"}
+    Actual status transitions should be confirmed by the AI agent, since the
+    Atlassian MCP server handles transitions as part of issue updates.
+    """
+    results = []
+    for key in keys:
+        try:
+            # Check current status
+            issue = await pool.call("getJiraIssue", cloudId=cid, issueIdOrKey=key)
+            status = "unknown"
+            if isinstance(issue, dict):
+                status = issue.get("fields", {}).get("status", {}).get("name", "unknown").lower()
 
-        await client.transition_issue(key, tid)
-        print(f"  {key}: transitioned to Done")
-        return {"key": key, "status": "transitioned"}
-    except Exception as exc:
-        print(f"  {key}: FAILED — {exc}", file=sys.stderr)
-        return {"key": key, "status": "failed", "error": str(exc)}
+            if status in DONE_STATUSES:
+                print(f"  {key}: already {status}")
+                results.append({"key": key, "status": "already_done"})
+                continue
 
-
-async def push_all(client: JiraClient, keys: list[str]) -> list[dict]:
-    tasks = [push_completion(client, k) for k in keys]
-    return await asyncio.gather(*tasks)
+            await pool.call("addCommentToJiraIssue",
+                            cloudId=cid, issueIdOrKey=key,
+                            commentBody="Marked as complete in JIRA_TODO.md. Please transition to Done.")
+            print(f"  {key}: completion comment added (transition via agent)")
+            results.append({"key": key, "status": "commented"})
+        except Exception as exc:
+            print(f"  {key}: FAILED — {exc}", file=sys.stderr)
+            results.append({"key": key, "status": "failed", "error": str(exc)})
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -80,30 +81,34 @@ async def push_all(client: JiraClient, keys: list[str]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-async def pull_sprint_tickets(client: JiraClient, config: JiraConfig) -> list[dict]:
+async def pull_sprint_tickets(pool: MCPPool, cid: str, project_key: str) -> list[dict]:
     """Fetch current sprint tickets for the user."""
     jql = (
-        f"project={config.project_key} "
+        f"project={project_key} "
         f"AND assignee=currentUser() "
         f"AND sprint in openSprints() "
         f"ORDER BY rank"
     )
-    data = await client.search(
-        jql,
-        fields="key,summary,status,issuetype,parent",
-        max_results=200,
+    data = await pool.call(
+        "searchJiraIssuesUsingJql",
+        cloudId=cid,
+        jql=jql,
+        fields=["key", "summary", "status", "issuetype", "parent"],
+        maxResults=200,
     )
-    return data.get("issues", [])
+    if isinstance(data, dict):
+        return data.get("issues", [])
+    return []
 
 
-def generate_todo_md(issues: list[dict], config: JiraConfig) -> str:
+def generate_todo_md(issues: list[dict], base_url: str) -> str:
     """Build the JIRA_TODO.md markdown content."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [
         "# JIRA Sprint TODO",
         "",
         f"Generated: {now}",
-        f"Source: {config.base_url}",
+        f"Source: {base_url}",
         "",
     ]
 
@@ -111,22 +116,16 @@ def generate_todo_md(issues: list[dict], config: JiraConfig) -> str:
     standalone: list[dict] = []
 
     for issue in issues:
-        f = issue["fields"]
-        key = issue["key"]
-        summary = f["summary"]
-        status = f["status"]["name"]
-        itype = f["issuetype"]["name"]
+        f = issue.get("fields", {})
+        key = issue.get("key", "")
+        summary = f.get("summary", "")
+        status = f.get("status", {}).get("name", "")
+        itype = f.get("issuetype", {}).get("name", "")
         parent_key = f.get("parent", {}).get("key") if f.get("parent") else None
         checkbox = "[x]" if status.lower() in DONE_STATUSES else "[ ]"
-        url = f"{config.base_url}/browse/{key}"
+        url = f"{base_url}/browse/{key}" if base_url else key
 
-        entry = {
-            "key": key,
-            "summary": summary,
-            "status": status,
-            "checkbox": checkbox,
-            "url": url,
-        }
+        entry = {"key": key, "summary": summary, "checkbox": checkbox, "url": url}
 
         if itype in ("Story", "Epic", "Bug") and not parent_key:
             stories[key] = {**entry, "children": []}
@@ -164,7 +163,6 @@ def generate_todo_md(issues: list[dict], config: JiraConfig) -> str:
     lines.append("---")
     lines.append(f"**Progress:** {done_count}/{total_count} completed")
     lines.append("")
-
     return "\n".join(lines)
 
 
@@ -174,30 +172,33 @@ def generate_todo_md(issues: list[dict], config: JiraConfig) -> str:
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Bidirectional Jira ↔ JIRA_TODO.md sync")
+    parser = argparse.ArgumentParser(description="Bidirectional Jira sync via MCP")
     parser.add_argument("--file", default="JIRA_TODO.md", help="Path to JIRA_TODO.md")
     parser.add_argument("--pull-only", action="store_true", help="Skip push, only pull")
     parser.add_argument("--push-only", action="store_true", help="Skip pull, only push")
     args = parser.parse_args()
 
-    config = JiraConfig.from_env()
-    if not config.project_key:
+    project_key = os.environ.get("JIRA_PROJECT_KEY", "")
+    base_url = os.environ.get("JIRA_BASE_URL", "")
+    if not project_key:
         print("ERROR: JIRA_PROJECT_KEY must be set.", file=sys.stderr)
         sys.exit(1)
 
     todo_path = Path(args.file)
 
-    async with JiraClient(config=config) as client:
+    async with MCPPool(concurrency=1) as pool:
+        cid = await pool.cloud_id()
+
         # Phase 1: Push
         if not args.pull_only:
-            completed = parse_completed_tickets(todo_path, config.project_key)
+            completed = parse_completed_tickets(todo_path, project_key)
             if completed:
-                print(f"=== Phase 1: Pushing {len(completed)} completion(s) to Jira ===")
-                results = await push_all(client, completed)
-                transitioned = sum(1 for r in results if r["status"] == "transitioned")
+                print(f"=== Phase 1: Pushing {len(completed)} completion(s) via MCP ===")
+                results = await push_completions(pool, cid, completed)
+                commented = sum(1 for r in results if r["status"] == "commented")
                 already = sum(1 for r in results if r["status"] == "already_done")
                 failed = sum(1 for r in results if r["status"] == "failed")
-                print(f"  Transitioned: {transitioned}, Already done: {already}, Failed: {failed}")
+                print(f"  Commented: {commented}, Already done: {already}, Failed: {failed}")
             else:
                 print("=== Phase 1: No locally completed tickets to push ===")
 
@@ -205,11 +206,11 @@ async def main() -> None:
                 return
 
         # Phase 2: Pull
-        print(f"\n=== Phase 2: Pulling sprint tickets from Jira ===")
-        issues = await pull_sprint_tickets(client, config)
+        print(f"\n=== Phase 2: Pulling sprint tickets via MCP ===")
+        issues = await pull_sprint_tickets(pool, cid, project_key)
         print(f"  Fetched {len(issues)} issue(s)")
 
-        md = generate_todo_md(issues, config)
+        md = generate_todo_md(issues, base_url)
         todo_path.write_text(md)
         print(f"  Wrote {todo_path}")
 

@@ -7,10 +7,10 @@ description: Manage Jira tickets using the official Atlassian MCP server and Pyt
 
 This is the **orchestrator skill**. It routes Jira operations to the right tool or sub-skill based on what the user needs.
 
-**Two interfaces available:**
+**Single authentication:** Everything goes through the Atlassian MCP server with OAuth 2.1. No API tokens needed. The batch scripts connect to the same MCP server via `mcp-remote`, so there is one auth mechanism for everything.
 
-1. **Atlassian MCP Server** — Real-time single operations via OAuth 2.1
-2. **Python Batch Scripts** — Parallel bulk operations via asyncio + aiohttp
+1. **MCP tools** — Direct calls for single operations
+2. **Batch scripts** — Multiple parallel MCP calls for bulk operations
 
 ## CRITICAL: Ticket Creation Guidelines
 
@@ -32,8 +32,8 @@ Use this table to decide which tool or sub-skill to invoke:
 | View one issue | MCP `getJiraIssue` | Direct MCP call |
 | Create 1-4 issues | MCP `createJiraIssue` | Direct MCP call per issue |
 | Create 5+ issues | `scripts/batch/batch_create.py` | Shell: run Python script |
-| Update 1-2 issues | MCP transition / `addCommentToJiraIssue` | Direct MCP call |
-| Update 3+ issues | `scripts/batch/batch_update.py` | Shell: run Python script |
+| Add comment to 1-2 issues | MCP `addCommentToJiraIssue` | Direct MCP call |
+| Add comment to 3+ issues | `scripts/batch/batch_update.py` | Shell: run Python script |
 | Run multiple JQL queries | `scripts/batch/batch_search.py` | Shell: run Python script |
 | Sprint sync (JIRA_TODO.md) | `scripts/batch/sprint_sync.py` | Shell: run Python script |
 | Sprint report | `scripts/batch/sprint_report.py` | Shell: run Python script |
@@ -42,13 +42,25 @@ Use this table to decide which tool or sub-skill to invoke:
 | Spec/requirements to backlog | **`skills/spec-to-backlog/SKILL.md`** | Read and follow sub-skill |
 | Status/progress report | **`skills/generate-status-report/SKILL.md`** | Read and follow sub-skill |
 
-**Rule:** For complex multi-step workflows (triage, meeting notes, specs, reports), always read and follow the sub-skill SKILL.md. For direct operations (search, create, update), use MCP or batch scripts directly.
+**Rule:** For complex multi-step workflows, read and follow the sub-skill. For direct operations, use MCP or batch scripts directly.
+
+---
+
+## Authentication
+
+**OAuth 2.1 everywhere.** No API tokens, no credentials in env vars.
+
+- **MCP tools** (agent calls): Cursor handles OAuth automatically via `.mcp.json`
+- **Batch scripts**: Connect through `mcp-remote` which handles the same OAuth flow
+- **First run**: Browser opens for Atlassian login. Token is cached by `mcp-remote` for subsequent runs.
+
+**Prerequisites:** Atlassian Cloud site with Jira, Node.js v18+ (for `mcp-remote`), browser for OAuth.
 
 ---
 
 ## MCP Server
 
-Configured via `.mcp.json` — the official Atlassian Rovo MCP server:
+Configured via `.mcp.json`:
 
 ```json
 {
@@ -59,8 +71,6 @@ Configured via `.mcp.json` — the official Atlassian Rovo MCP server:
   }
 }
 ```
-
-**Prerequisites:** Atlassian Cloud site with Jira, Node.js v18+, browser for OAuth 2.1 login.
 
 ### Available MCP Tools
 
@@ -80,58 +90,45 @@ Configured via `.mcp.json` — the official Atlassian Rovo MCP server:
 
 ## Python Batch Scripts
 
-Located in `scripts/batch/`. Install dependencies: `uv sync`
+Located in `scripts/batch/`. Install: `uv sync`
 
-Auth via environment variables:
+These scripts connect to the **same MCP server** via `mcp-remote`. They open multiple parallel MCP sessions to execute bulk operations concurrently.
+
+**Configuration (env vars, not credentials):**
 ```bash
-export JIRA_USER="your-email@company.com"
-export JIRA_API_TOKEN="your-api-token"
-export JIRA_BASE_URL="https://your-instance.atlassian.net"
-export JIRA_PROJECT_KEY="PROJ"
+export JIRA_PROJECT_KEY="PROJ"                              # Which project to target
+export JIRA_BASE_URL="https://your-instance.atlassian.net"  # Optional, for browse URLs
 ```
 
 ### batch_create.py — Parallel Issue Creation
 
 ```bash
-# From CLI args
-uv run python scripts/batch/batch_create.py --type story "Implement auth" "Add logging" "Write tests"
+uv run python scripts/batch/batch_create.py --type Story "Implement auth" "Add logging" "Write tests"
 
-# Sub-tasks under a parent
-uv run python scripts/batch/batch_create.py --type subtask --parent PROJ-100 "Unit tests" "Integration tests"
+uv run python scripts/batch/batch_create.py --type Sub-task --parent PROJ-100 "Unit tests" "Integration tests"
 
-# From JSON stdin
 echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin
 
-# From JSON file
 uv run python scripts/batch/batch_create.py --file tickets.json
 ```
 
-### batch_update.py — Parallel Transitions & Comments
+### batch_update.py — Parallel Comments
 
 ```bash
-# Transition to Done
-uv run python scripts/batch/batch_update.py --transition done PROJ-101 PROJ-102 PROJ-103
-
-# Add comment to multiple
 uv run python scripts/batch/batch_update.py --comment "Deployed to staging" PROJ-101 PROJ-102
 
-# Combined
-uv run python scripts/batch/batch_update.py --transition done --comment "Sprint 5 complete" PROJ-101 PROJ-102
-
-# From stdin
-echo -e "PROJ-101\nPROJ-102" | uv run python scripts/batch/batch_update.py --stdin --transition done
+echo -e "PROJ-101\nPROJ-102" | uv run python scripts/batch/batch_update.py --stdin --comment "Done"
 ```
+
+Note: For status transitions, use the AI agent directly ("Transition PROJ-101 to Done").
 
 ### batch_search.py — Concurrent JQL Queries
 
 ```bash
-# Shortcut queries (all run in parallel)
 uv run python scripts/batch/batch_search.py mine sprint bugs recent
 
-# Custom JQL
-uv run python scripts/batch/batch_search.py "priority=High AND status!=Done" "assignee=currentUser()"
+uv run python scripts/batch/batch_search.py "priority=High AND status!=Done"
 
-# JSON output
 uv run python scripts/batch/batch_search.py --json-output mine sprint
 ```
 
@@ -140,26 +137,20 @@ uv run python scripts/batch/batch_search.py --json-output mine sprint
 ### sprint_sync.py — Bidirectional JIRA_TODO.md Sync
 
 ```bash
-# Full sync (push completions + pull fresh state)
 uv run python scripts/batch/sprint_sync.py
 
-# Pull only (skip pushing local completions)
 uv run python scripts/batch/sprint_sync.py --pull-only
 
-# Push only (sync local [x] to Jira, skip pull)
 uv run python scripts/batch/sprint_sync.py --push-only
 ```
 
 ### sprint_report.py — Sprint Progress Report
 
 ```bash
-# Pretty-printed with progress bar
 uv run python scripts/batch/sprint_report.py
 
-# Flag stale after 5 days instead of default 3
 uv run python scripts/batch/sprint_report.py --stale-days 5
 
-# JSON output
 uv run python scripts/batch/sprint_report.py --json-output
 ```
 
@@ -167,27 +158,27 @@ uv run python scripts/batch/sprint_report.py --json-output
 
 ## Sub-Skills
 
-These handle complex multi-step Jira workflows. When the user's request matches one of these, **read the sub-skill's SKILL.md and follow its workflow**.
+When the user's request matches one of these, **read the sub-skill's SKILL.md and follow its workflow**.
 
 ### Capture Tasks from Meeting Notes
 **Path:** `skills/capture-tasks-from-meeting-notes/SKILL.md`
-**Trigger:** User has meeting notes and wants to create Jira tasks from action items.
-**What it does:** Parses pasted text, extracts action items with assignees, looks up Jira accounts via MCP, creates tasks. For 5+ tasks, delegates to `batch_create.py`.
+**Trigger:** User has meeting notes and wants Jira tasks from action items.
+**What it does:** Parses text, extracts action items, looks up accounts via MCP, creates tasks. For 5+ tasks, delegates to `batch_create.py`.
 
 ### Spec to Backlog
 **Path:** `skills/spec-to-backlog/SKILL.md`
-**Trigger:** User has a spec or requirements doc and wants a structured Jira backlog.
-**What it does:** Analyzes spec, creates Epic first, then child tickets (Story/Task/Bug) linked to Epic. For 5+ children, delegates to `batch_create.py`.
+**Trigger:** User has a spec and wants a structured Jira backlog.
+**What it does:** Analyzes spec, creates Epic first, then child tickets linked to Epic. For 5+ children, delegates to `batch_create.py`.
 
 ### Triage Issue
 **Path:** `skills/triage-issue/SKILL.md`
-**Trigger:** User has a bug report or error and wants to check for duplicates before filing.
-**What it does:** Extracts error signature, runs multiple JQL searches via MCP (or `batch_search.py`), presents findings, creates new issue or adds comment to existing.
+**Trigger:** User has a bug report or error and wants to check for duplicates.
+**What it does:** Extracts error signature, runs JQL searches via MCP (or `batch_search.py`), creates new issue or adds comment.
 
 ### Generate Status Report
 **Path:** `skills/generate-status-report/SKILL.md`
-**Trigger:** User needs a status report, sprint summary, or progress update.
-**What it does:** Queries Jira via MCP or `batch_search.py`, analyzes metrics, formats report as markdown. Quick alternative: `uv run python scripts/batch/sprint_report.py`.
+**Trigger:** User needs a status report or sprint summary.
+**What it does:** Queries Jira via MCP or `batch_search.py`, formats report. Quick alternative: `uv run python scripts/batch/sprint_report.py`.
 
 ---
 
@@ -195,19 +186,19 @@ These handle complex multi-step Jira workflows. When the user's request matches 
 
 ### Start of Session
 ```bash
-uv run python scripts/batch/sprint_report.py      # Quick overview
-uv run python scripts/batch/sprint_sync.py        # Sync JIRA_TODO.md
+uv run python scripts/batch/sprint_report.py
+uv run python scripts/batch/sprint_sync.py
 ```
 
 ### During Development
 - **Search:** MCP `searchJiraIssuesUsingJql`
 - **View:** MCP `getJiraIssue`
-- **Update:** MCP `addCommentToJiraIssue` to log progress
+- **Update:** MCP `addCommentToJiraIssue`
 
 ### End of Session
 ```bash
-uv run python scripts/batch/sprint_sync.py        # Push completions, pull updates
-uv run python scripts/batch/sprint_report.py      # Final report
+uv run python scripts/batch/sprint_sync.py
+uv run python scripts/batch/sprint_report.py
 ```
 
 ---
@@ -235,34 +226,6 @@ Source: https://company.atlassian.net
 
 - `[ ]` = Pending/In Progress
 - `[x]` = Completed (syncs to Jira as Done)
-- Stories/Epics as `##` headers with sub-tasks below
-- Standalone tasks under "Other Tasks"
-
----
-
-## Environment Variables
-
-**Required:**
-```bash
-export JIRA_USER="your-email@company.com"
-export JIRA_API_TOKEN="your-api-token"
-export JIRA_BASE_URL="https://your-instance.atlassian.net"
-export JIRA_PROJECT_KEY="PROJ"
-```
-
-**Optional:**
-```bash
-export JIRA_ACCOUNT_ID="your-account-id"
-export JIRA_STORY_TYPE_ID="10001"
-export JIRA_SUBTASK_TYPE_ID="10003"
-export JIRA_TASK_TYPE_ID="10002"
-export JIRA_BUG_TYPE_ID="10004"
-export JIRA_COMPONENT_ID=""
-export JIRA_SPRINT_ID=""
-export JIRA_SPRINT_FIELD="customfield_10020"
-```
-
-Generate API token at: https://id.atlassian.com/manage-profile/security/api-tokens
 
 ---
 
@@ -271,7 +234,6 @@ Generate API token at: https://id.atlassian.com/manage-profile/security/api-toke
 | Error | Cause | Fix |
 |-------|-------|-----|
 | MCP OAuth failure | Token expired | Re-authenticate in browser |
-| `Client must be authenticated` | Wrong batch credentials | Verify JIRA_USER and JIRA_API_TOKEN |
-| `Components is required` | Missing required field | Set JIRA_COMPONENT_ID |
-| `Field 'customfield_10020' cannot be set` | Wrong sprint field | Check correct field ID for your project |
-| Rate limit (429) | Too many requests | Batch scripts auto-retry with backoff |
+| `No accessible Atlassian resources` | OAuth not completed | Run any batch script to trigger browser login |
+| `Components is required` | Missing required field | Use `additional_fields` in `createJiraIssue` |
+| Rate limit (429) | Too many requests | Reduce `--concurrency` on batch scripts |

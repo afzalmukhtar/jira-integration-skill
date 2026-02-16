@@ -1,11 +1,11 @@
 # Jira Integration Skill
 
-Manage Jira tickets without leaving your terminal or editor. Built as an AI agent skill for Cursor and Codex.
+Manage Jira tickets without leaving your terminal or editor. Built as an AI agent skill for Cursor and Windsurf.
 
-**Two interfaces:**
+**Single authentication** — everything goes through the official [Atlassian MCP Server](https://github.com/atlassian/atlassian-mcp-server) with OAuth 2.1. No API tokens needed.
 
-1. **Atlassian MCP Server** — Real-time single operations via the official [Atlassian Rovo MCP Server](https://github.com/atlassian/atlassian-mcp-server) with OAuth 2.1
-2. **Python Batch Scripts** — Parallel bulk operations via asyncio + aiohttp
+1. **MCP tools** — Direct calls for single operations
+2. **Batch scripts** — Multiple parallel MCP calls for bulk operations
 
 ## Setup
 
@@ -25,84 +25,59 @@ The project includes `.mcp.json` which configures the official Atlassian Rovo MC
 
 **Prerequisites:**
 - Atlassian Cloud site with Jira
-- Node.js v18+ (for `mcp-remote` proxy on older Cursor versions)
+- Node.js v18+ (for `mcp-remote`)
 - Browser for OAuth 2.1 login
 
-On first use, your browser opens for OAuth authentication. The MCP server respects your existing Jira permissions.
+On first use, your browser opens for OAuth authentication. The token is cached for subsequent runs.
 
-### 2. Python Batch Scripts (for Bulk Operations)
+### 2. Python Batch Scripts
 
 ```bash
 uv sync
 ```
 
-Environment variables in `~/.zshrc` or `~/.bashrc`:
+**Configuration** (not credentials, just project settings):
 
 ```bash
-export JIRA_USER="your-email@company.com"
-export JIRA_API_TOKEN="your-api-token"
-export JIRA_BASE_URL="https://your-instance.atlassian.net"
-export JIRA_PROJECT_KEY="PROJ"
+export JIRA_PROJECT_KEY="PROJ"                              # Which project to target
+export JIRA_BASE_URL="https://your-instance.atlassian.net"  # Optional, for browse URLs
 ```
 
-Get your API token at: https://id.atlassian.com/manage-profile/security/api-tokens
-
-**Optional configuration:**
-
-```bash
-export JIRA_ACCOUNT_ID="your-account-id"
-export JIRA_STORY_TYPE_ID="10001"
-export JIRA_SUBTASK_TYPE_ID="10003"
-export JIRA_TASK_TYPE_ID="10002"
-export JIRA_BUG_TYPE_ID="10004"
-export JIRA_COMPONENT_ID=""
-export JIRA_SPRINT_ID=""
-export JIRA_SPRINT_FIELD="customfield_10020"
-```
+The batch scripts connect to the **same MCP server** through `mcp-remote`. On first run, the browser opens for OAuth — same flow as the IDE.
 
 ## Python Batch Scripts
 
-All batch scripts are in `scripts/batch/` and use asyncio for parallel execution.
+All scripts are in `scripts/batch/` and use multiple parallel MCP sessions for concurrent operations.
 
 ### Batch Create
 
 ```bash
-# Create multiple stories
-uv run python scripts/batch/batch_create.py --type story "Implement auth" "Add logging" "Write tests"
+uv run python scripts/batch/batch_create.py --type Story "Implement auth" "Add logging" "Write tests"
 
-# Sub-tasks under a parent
-uv run python scripts/batch/batch_create.py --type subtask --parent PROJ-100 "Unit tests" "Integration tests"
+uv run python scripts/batch/batch_create.py --type Sub-task --parent PROJ-100 "Unit tests" "Integration tests"
 
-# From JSON file
 uv run python scripts/batch/batch_create.py --file tickets.json
 
-# From JSON stdin
 echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin
 ```
 
-### Batch Update
+### Batch Update (Comments)
 
 ```bash
-# Transition multiple tickets to Done
-uv run python scripts/batch/batch_update.py --transition done PROJ-101 PROJ-102 PROJ-103
-
-# Add comment to multiple tickets
 uv run python scripts/batch/batch_update.py --comment "Deployed to staging" PROJ-101 PROJ-102
 
-# Combined
-uv run python scripts/batch/batch_update.py --transition done --comment "Sprint 5" PROJ-101 PROJ-102
+echo -e "PROJ-101\nPROJ-102" | uv run python scripts/batch/batch_update.py --stdin --comment "Done"
 ```
+
+For status transitions, use the AI agent directly: "Transition PROJ-101, PROJ-102 to Done."
 
 ### Batch Search
 
 ```bash
-# Shortcut queries (run in parallel)
 uv run python scripts/batch/batch_search.py mine sprint bugs recent
 
-# Custom JQL
 uv run python scripts/batch/batch_search.py "priority=High AND status!=Done"
 
-# JSON output
 uv run python scripts/batch/batch_search.py --json-output mine sprint
 ```
 
@@ -113,26 +88,20 @@ uv run python scripts/batch/batch_search.py --json-output mine sprint
 Bidirectional sync between `JIRA_TODO.md` and Jira:
 
 ```bash
-# Full sync (push local completions + pull fresh state)
 uv run python scripts/batch/sprint_sync.py
 
-# Pull only
 uv run python scripts/batch/sprint_sync.py --pull-only
 
-# Push only
 uv run python scripts/batch/sprint_sync.py --push-only
 ```
 
 ### Sprint Report
 
 ```bash
-# Pretty-printed report with progress bar
 uv run python scripts/batch/sprint_report.py
 
-# Flag stale after 5 days
 uv run python scripts/batch/sprint_report.py --stale-days 5
 
-# JSON output
 uv run python scripts/batch/sprint_report.py --json-output
 ```
 
@@ -147,7 +116,7 @@ Jira Board                          JIRA_TODO.md
 └──────────┘                        └──────────────┘
 ```
 
-One command. Push completions up, pull new state down. All API calls run concurrently.
+One command. Push completions up, pull new state down. All MCP calls run concurrently.
 
 ## Skills
 
@@ -166,25 +135,30 @@ Each skill directory contains a `SKILL.md` with full workflow documentation for 
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  AI Agent (Cursor / Codex)                          │
+│  AI Agent (Cursor / Windsurf)                       │
 │                                                     │
 │  Orchestrator SKILL.md                              │
 │    │                                                │
-│    ├─ Single ops ──> Atlassian MCP Server (OAuth)   │
+│    ├─ Single ops ──> MCP tool call                  │
 │    │                      │                         │
-│    ├─ Bulk ops ───> Python Batch Scripts (asyncio)   │
+│    ├─ Bulk ops ───> Batch scripts (parallel MCP)    │
 │    │                      │                         │
-│    └─ Workflows ──> Sub-Skills (skills/*.md)         │
+│    └─ Workflows ──> Sub-Skills (skills/*.md)        │
 │                           │                         │
-│                      Jira Cloud REST API            │
+│                    Atlassian MCP Server              │
+│                      (OAuth 2.1)                    │
+│                           │                         │
+│                    Jira Cloud REST API               │
 └─────────────────────────────────────────────────────┘
 ```
+
+All paths converge on the same MCP server. One auth, one connection.
 
 ## Requirements
 
 - Python 3.11+ with [uv](https://docs.astral.sh/uv/) package manager
-- Jira Cloud instance with API access
-- Node.js v18+ (for MCP proxy on older IDE versions)
+- Jira Cloud instance
+- Node.js v18+ (for `mcp-remote`)
 
 ## License
 
