@@ -1,11 +1,15 @@
 # Jira Integration Skill
 
-Manage Jira tickets without leaving your terminal or editor. Built as an AI agent skill for Cursor and Windsurf.
+Manage Jira tickets without leaving your terminal or editor. Built as an AI agent skill for Cursor, Windsurf, Claude Code, MoltBot, Warp, etc. to name a few.
 
 **Single authentication** — everything goes through the official [Atlassian MCP Server](https://github.com/atlassian/atlassian-mcp-server) with OAuth 2.1. No API tokens needed.
 
-1. **MCP tools** — Direct calls for single operations
-2. **Batch scripts** — Multiple parallel MCP calls for bulk operations
+## Features
+
+- **MCP tools** — Direct calls for single operations (search, view, create, comment)
+- **Batch scripts** — Parallel MCP calls for bulk operations (5+ tickets)
+- **Smart sync** — Bidirectional sync between local `JIRA_TODO.md` and Jira with emoji status tracking
+- **Sub-skills** — Specialized workflows for meeting notes, specs, and bug triage
 
 ## Setup
 
@@ -40,7 +44,7 @@ uv sync
 
 ```bash
 export JIRA_PROJECT_KEY="PROJ"                              # Which project to target
-export JIRA_BASE_URL="https://your-instance.atlassian.net"  # Optional, for browse URLs
+export JIRA_BASE_URL="https://your-instance.atlassian.net"  # For browse URLs in JIRA_TODO.md
 ```
 
 The batch scripts connect to the **same MCP server** through `mcp-remote`. On first run, the browser opens for OAuth — same flow as the IDE.
@@ -52,13 +56,17 @@ All scripts are in `scripts/batch/` and use multiple parallel MCP sessions for c
 ### Batch Create
 
 ```bash
-uv run python scripts/batch/batch_create.py --type Story "Implement auth" "Add logging" "Write tests"
+# Create issues with component and assignee
+uv run python scripts/batch/batch_create.py --type Story --component "My Component" --assignee "John Doe" "Implement auth" "Add logging"
 
-uv run python scripts/batch/batch_create.py --type Sub-task --parent PROJ-100 "Unit tests" "Integration tests"
+# Create sub-tasks under a parent
+uv run python scripts/batch/batch_create.py --type Sub-task --parent PROJ-100 --component "My Component" "Unit tests" "Docs"
 
-uv run python scripts/batch/batch_create.py --file tickets.json
+# From JSON file
+uv run python scripts/batch/batch_create.py --file tickets.json --component "My Component" --assignee "John Doe"
 
-echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin
+# From stdin
+echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin --component "My Component"
 ```
 
 ### Batch Update (Comments)
@@ -85,14 +93,20 @@ uv run python scripts/batch/batch_search.py --json-output mine sprint
 
 ### Sprint Sync
 
-Bidirectional sync between `JIRA_TODO.md` and Jira:
+Smart bidirectional sync between `JIRA_TODO.md` and Jira:
 
 ```bash
+# Full sync: push local emoji changes, then pull from Jira
 uv run python scripts/batch/sprint_sync.py
 
+# Pull only: fetch sprint tickets and regenerate JIRA_TODO.md
 uv run python scripts/batch/sprint_sync.py --pull-only
 
+# Push only: detect local emoji changes and add transition comments
 uv run python scripts/batch/sprint_sync.py --push-only
+
+# Filter by component
+uv run python scripts/batch/sprint_sync.py --component "My Component"
 ```
 
 ### Sprint Report
@@ -105,37 +119,77 @@ uv run python scripts/batch/sprint_report.py --stale-days 5
 uv run python scripts/batch/sprint_report.py --json-output
 ```
 
-## How Bidirectional Sync Works
+## JIRA_TODO.md Format
 
+The sync creates a local `JIRA_TODO.md` file with emoji-based status tracking:
+
+| Emoji | Status | Jira Statuses |
+|-------|--------|---------------|
+| 📋 | To Do | To Do, Open, Backlog |
+| 👨🏻‍💻 | In Progress | In Progress, In Development |
+| 🔍 | Code Review | In Review, Code Review |
+| ⏳ | Pending External | Blocked, Waiting, On Hold |
+| ✅ | Done | Done, Closed, Resolved |
+| ❌ | Cancelled | Cancelled, Rejected, Won't Do |
+
+**Example:**
+
+```markdown
+# JIRA Sprint TODO
+
+> **Project:** PROJ
+> **Assignee:** John Doe (account: abc123)
+> **Component:** My Component
+> **Last synced:** 2025-01-15 10:30
+
+### [PROJ-200](https://company.atlassian.net/browse/PROJ-200) Story Title
+
+👨🏻‍💻 [PROJ-201](https://company.atlassian.net/browse/PROJ-201) Sub-task 1
+📋 [PROJ-202](https://company.atlassian.net/browse/PROJ-202) Sub-task 2
+
+### Tasks
+
+📋 [PROJ-100](https://company.atlassian.net/browse/PROJ-100) Standalone task
+🔍 [PROJ-103](https://company.atlassian.net/browse/PROJ-103) PR under review
+
+### Completed
+
+✅ [PROJ-300](https://company.atlassian.net/browse/PROJ-300) Done task
 ```
-Jira Board                          JIRA_TODO.md
-┌──────────┐    sprint_sync.py      ┌──────────────┐
-│ PROJ-101 │ <--------------------  │ [x] PROJ-101 │  (you marked done locally)
-│ PROJ-102 │ -------------------->  │ [ ] PROJ-102 │  (new ticket pulled)
-│ PROJ-103 │ -------------------->  │ [x] PROJ-103 │  (already done in Jira)
-└──────────┘                        └──────────────┘
-```
 
-One command. Push completions up, pull new state down. All MCP calls run concurrently.
+**Workflow:** Change an emoji locally (e.g., 📋 → 👨🏻‍💻), then run `sprint_sync.py` — the script detects drift and adds transition comments to Jira.
 
-## Skills
+## Sub-Skills
 
 The `skills/` directory contains specialized agent workflows for complex multi-step Jira operations:
 
-| Skill | What it does |
-|-------|-------------|
-| `capture-tasks-from-meeting-notes` | Parse meeting notes, extract action items, create Jira tasks with assignees |
-| `spec-to-backlog` | Convert specs/requirements into Epic + child tickets |
-| `triage-issue` | Search for duplicate bugs, create or comment on issues |
-| `generate-status-report` | Query Jira, analyze data, format status reports |
+| Skill | Trigger | What it does |
+|-------|---------|-------------|
+| `capture-tasks-from-meeting-notes` | Meeting notes with action items | Parse notes, extract action items, look up assignees, create tasks |
+| `spec-to-backlog` | Spec or requirements doc | Analyze spec, create Epic first, then child tickets linked to Epic |
+| `triage-issue` | Bug report or error message | Search for duplicates, present findings, create or comment on issues |
 
-Each skill directory contains a `SKILL.md` with full workflow documentation for AI agents. The main `SKILL.md` at the project root acts as an orchestrator that routes requests to the appropriate sub-skill.
+Each skill directory contains a `SKILL.md` with full workflow documentation. The main `SKILL.md` at the project root acts as an orchestrator that routes requests to the appropriate sub-skill.
+
+## Available MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `searchJiraIssuesUsingJql` | Search issues with JQL |
+| `getJiraIssue` | Get full issue details |
+| `createJiraIssue` | Create a new issue |
+| `addCommentToJiraIssue` | Add comment to issue |
+| `getVisibleJiraProjects` | List accessible projects |
+| `getJiraProjectIssueTypesMetadata` | Get issue types for a project |
+| `getJiraIssueTypeMetaWithFields` | Get required fields for an issue type |
+| `lookupJiraAccountId` | Find user by name/email |
+| `getAccessibleAtlassianResources` | List connected Atlassian sites |
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  AI Agent (Cursor / Windsurf)                       │
+│  AI Agent (Cursor / Windsurf / Warp / Claude Code)  │
 │                                                     │
 │  Orchestrator SKILL.md                              │
 │    │                                                │
@@ -145,10 +199,10 @@ Each skill directory contains a `SKILL.md` with full workflow documentation for 
 │    │                      │                         │
 │    └─ Workflows ──> Sub-Skills (skills/*.md)        │
 │                           │                         │
-│                    Atlassian MCP Server              │
+│                    Atlassian MCP Server             │
 │                      (OAuth 2.1)                    │
 │                           │                         │
-│                    Jira Cloud REST API               │
+│                    Jira Cloud REST API              │
 └─────────────────────────────────────────────────────┘
 ```
 
