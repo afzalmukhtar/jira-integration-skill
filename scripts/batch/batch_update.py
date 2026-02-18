@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Batch-update Jira issues in parallel via MCP (comments and field updates).
+"""Batch-add comments to Jira issues in parallel via MCP.
 
 Usage:
     # Add comment to multiple tickets:
     uv run python scripts/batch/batch_update.py --comment "Deployed to staging" PROJ-101 PROJ-102
 
-    # Update a field on multiple tickets:
-    uv run python scripts/batch/batch_update.py --field priority --value High PROJ-101 PROJ-102
-
     # From stdin (one key per line):
     echo -e "PROJ-101\\nPROJ-102" | uv run python scripts/batch/batch_update.py --stdin --comment "Done"
 
-Note: Status transitions are handled by the AI agent via MCP tool calls directly,
-since the Atlassian MCP server handles transitions through issue updates.
-For bulk transitions, use the agent: "Transition PROJ-101, PROJ-102 to Done".
+Note: This script only supports adding comments. For field updates or status
+transitions, use the AI agent's MCP tools directly.
 """
 
 from __future__ import annotations

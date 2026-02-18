@@ -14,9 +14,11 @@ Automatically extract action items from meeting notes and create Jira tasks with
 
 **Use this skill when:** Users have meeting notes with action items that need to become Jira tasks.
 
-**Primary tools:** Atlassian MCP tools (`lookupJiraAccountId`, `createJiraIssue`, `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`)
+**Primary tools:** Atlassian MCP tools (`lookupJiraAccountId`, `createJiraIssue`)
 
 **Batch alternative:** For 5+ tickets, use `scripts/batch/batch_create.py` for parallel creation.
+
+**Project defaults:** Read from `JIRA_TODO.md` identity header in the project root. The header contains Project, Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
 
 ---
 
@@ -73,16 +75,15 @@ For each action item, extract:
 2. **Task Description** — Text after "to", "will", "should", "-", ":"
 3. **Context** (optional) — Meeting title/date, surrounding discussion context
 
-### Step 3: Ask for Project Key
+### Step 3: Load Project Defaults
 
-Before looking up users or creating tasks, identify the Jira project.
+Read `JIRA_TODO.md` from the project root to get the identity header. Extract:
+- **Project key** (default: `AIPDQ`)
+- **Component name** (for `additional_fields`)
+- **Assignee account ID** (for the default assignee — Afzal Mukhtar)
+- **Base URL** (for browse links in the summary)
 
-**Ask:** "Which Jira project should I create these tasks in? (e.g., PROJ, ENG)"
-
-If user is unsure, call `getVisibleJiraProjects` via MCP:
-```
-getVisibleJiraProjects(cloudId="...", action="create")
-```
+If `JIRA_TODO.md` doesn't exist, follow the initialization workflow in the main SKILL.md to create it first.
 
 ### Step 4: Lookup Account IDs
 
@@ -121,24 +122,23 @@ Would you like me to:
 
 ### Step 6: Create Tasks
 
-**For 1-4 tasks:** Use MCP tool `createJiraIssue` for each:
+**For 1-4 tasks:** Use MCP tool `createJiraIssue` for each. Always include the component from defaults:
 ```
 createJiraIssue(
   cloudId="...",
-  projectKey="PROJ",
+  projectKey="AIPDQ",
   issueTypeName="Task",
   summary="[Task description]",
   description="[Context from meeting]",
-  assignee_account_id="[looked up ID]"
+  assignee_account_id="[looked up ID]",
+  additional_fields={"components": [{"name": "[component from JIRA_TODO.md]"}]}
 )
 ```
 
-**For 5+ tasks:** Use batch Python script for parallel creation:
+**For 5+ tasks:** Use batch script with component and assignee flags:
 ```bash
-uv run python scripts/batch/batch_create.py --type task "Task 1" "Task 2" "Task 3" "Task 4" "Task 5"
+uv run python scripts/batch/batch_create.py --type Task --project AIPDQ --component "[component]" --assignee "[assignee]" "Task 1" "Task 2" "Task 3" "Task 4" "Task 5"
 ```
-
-Check issue type availability with `getJiraProjectIssueTypesMetadata` first.
 
 **Task description format:**
 ```markdown

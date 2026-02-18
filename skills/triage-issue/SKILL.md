@@ -16,6 +16,8 @@ Automatically triage bug reports and error messages by searching Jira for duplic
 
 **Primary tools:** Atlassian MCP tools (`searchJiraIssuesUsingJql`, `createJiraIssue`, `addCommentToJiraIssue`, `getJiraIssue`)
 
+**Project defaults:** Read from `JIRA_TODO.md` identity header in the project root. The header contains Project (default: `AIPDQ`), Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
+
 ---
 
 ## Workflow
@@ -36,7 +38,7 @@ Execute **multiple targeted searches** via MCP to catch duplicates:
 ```
 searchJiraIssuesUsingJql(
   cloudId="...",
-  jql='project = "PROJ" AND text ~ "error signature" AND type = Bug ORDER BY created DESC',
+  jql='project = AIPDQ AND text ~ "error signature" AND type = Bug ORDER BY created DESC',
   fields=["summary","description","status","resolution","assignee"],
   maxResults=20
 )
@@ -46,7 +48,7 @@ searchJiraIssuesUsingJql(
 ```
 searchJiraIssuesUsingJql(
   cloudId="...",
-  jql='project = "PROJ" AND text ~ "component keywords" AND type = Bug ORDER BY updated DESC',
+  jql='project = AIPDQ AND text ~ "component keywords" AND type = Bug ORDER BY updated DESC',
   fields=["summary","description","status","resolution","assignee"],
   maxResults=20
 )
@@ -56,7 +58,7 @@ searchJiraIssuesUsingJql(
 ```
 searchJiraIssuesUsingJql(
   cloudId="...",
-  jql='project = "PROJ" AND summary ~ "symptom keywords" ORDER BY priority DESC',
+  jql='project = AIPDQ AND summary ~ "symptom keywords" ORDER BY priority DESC',
   fields=["summary","description","status","resolution","assignee"],
   maxResults=20
 )
@@ -114,16 +116,15 @@ addCommentToJiraIssue(
 
 **Option B: Create New Issue**
 
-First check issue types: `getJiraProjectIssueTypesMetadata`
-
-Then create:
+Create with project defaults (component, assignee from `JIRA_TODO.md`):
 ```
 createJiraIssue(
   cloudId="...",
-  projectKey="PROJ",
+  projectKey="AIPDQ",
   issueTypeName="Bug",
   summary="[Component]: [Error Type] - [Brief Symptom]",
-  description="[structured description]"
+  description="[structured description]",
+  additional_fields={"components": [{"name": "[component from JIRA_TODO.md]"}]}
 )
 ```
 
@@ -190,6 +191,6 @@ Ask for: specific error message, component/system, environment, steps to reprodu
 
 - Feature requests (use `spec-to-backlog`)
 - Task creation from meeting notes (use `capture-tasks-from-meeting-notes`)
-- Status reports (use `generate-status-report`)
+- Status reports (run `scripts/batch/sprint_report.py`)
 
 **Use only when:** Bug reports or errors need triage against existing Jira issues.

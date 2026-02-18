@@ -2,11 +2,11 @@
 """Batch-create Jira issues in parallel via MCP.
 
 Usage:
-    # From CLI arguments:
-    uv run python scripts/batch/batch_create.py --type story "Implement auth" "Add logging"
+    # From CLI arguments (with component and assignee):
+    uv run python scripts/batch/batch_create.py --type Story --component "C3 Docs & Unified Docs ML" --assignee "Afzal Mukhtar" "Implement auth" "Add logging"
 
     # Sub-tasks under a parent:
-    uv run python scripts/batch/batch_create.py --type subtask --parent PROJ-100 "Unit tests" "Docs"
+    uv run python scripts/batch/batch_create.py --type Sub-task --parent AIPDQ-100 --component "C3 Docs & Unified Docs ML" "Unit tests" "Docs"
 
     # From JSON stdin:
     echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -34,6 +35,8 @@ async def main() -> None:
     parser.add_argument("--file", type=str, help="Read JSON array from a file")
     parser.add_argument("--description", default="", help="Default description for CLI-arg tickets")
     parser.add_argument("--project", default="", help="Project key override (default: JIRA_PROJECT_KEY env)")
+    parser.add_argument("--component", default="", help="Component name to set on all created issues")
+    parser.add_argument("--assignee", default="", help="Assignee display name (looked up via MCP)")
     parser.add_argument("--concurrency", type=int, default=3, help="Parallel sessions (default: 3)")
     parser.add_argument("--json-output", action="store_true", help="Output results as JSON")
     args = parser.parse_args()
@@ -58,7 +61,7 @@ async def main() -> None:
 
     async with MCPPool(concurrency=concurrency) as pool:
         cid = await pool.cloud_id()
-        project = args.project or pool._queue._queue[0].project_key
+        project = args.project or os.environ.get("JIRA_PROJECT_KEY", "")
 
         if not project:
             print("ERROR: Set JIRA_PROJECT_KEY env var or use --project.", file=sys.stderr)
@@ -66,6 +69,20 @@ async def main() -> None:
 
         if args.parent:
             print(f"  Parent: {args.parent}")
+
+        assignee_id = ""
+        if args.assignee:
+            accounts = await pool.call("lookupJiraAccountId", cloudId=cid, query=args.assignee)
+            if isinstance(accounts, list) and accounts:
+                assignee_id = accounts[0].get("accountId", "")
+                print(f"  Assignee: {accounts[0].get('displayName', args.assignee)} ({assignee_id})")
+            else:
+                print(f"  WARNING: Could not find assignee '{args.assignee}', creating unassigned", file=sys.stderr)
+
+        additional_fields: dict = {}
+        if args.component:
+            additional_fields["components"] = [{"name": args.component}]
+            print(f"  Component: {args.component}")
 
         call_args = []
         for t in tickets:
@@ -79,6 +96,10 @@ async def main() -> None:
                 kwargs["description"] = t["description"]
             if args.parent:
                 kwargs["parent"] = args.parent
+            if assignee_id:
+                kwargs["assignee_account_id"] = assignee_id
+            if additional_fields:
+                kwargs["additional_fields"] = additional_fields
             call_args.append(kwargs)
 
         raw_results = await pool.map("createJiraIssue", call_args)
