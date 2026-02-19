@@ -20,10 +20,10 @@ These defaults apply to **every** Jira operation unless the user explicitly over
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| **Project Key** | `AIPDQ` | Always verify with user on first interaction: "Confirming project AIPDQ — correct?" |
-| **Assignee** | Afzal Mukhtar | Always assign all created tickets to this user. Look up `accountId` via `lookupJiraAccountId` with query `"Afzal Mukhtar"`. |
+| **Project Key** | *(ask user)* | Always verify with user on first interaction: "What is your Jira project key?" |
+| **Assignee** | *(current user)* | Always assign all created tickets to the current user. Look up `accountId` via `lookupJiraAccountId` with the user's name. |
 | **Component** | *(must be verified)* | Ask user for the component name on first interaction, then verify it exists by searching for an existing issue with that component. Cache the verified name for the session. |
-| **Base URL** | `https://cisco-sbg.atlassian.net` | For browse links in JIRA_TODO.md |
+| **Base URL** | *(ask user)* | The Atlassian Cloud URL (e.g., `https://<org>.atlassian.net`). For browse links in JIRA_TODO.md. |
 
 ---
 
@@ -35,27 +35,36 @@ On the **first Jira interaction in a project**, perform these steps:
 
 Use the existing MCP tools — do NOT write custom scripts.
 
-1. Confirm project key is `AIPDQ` (or get override from user)
-2. Look up assignee account ID:
-   - MCP tool: `lookupJiraAccountId` with `query: "Afzal Mukhtar"`
+1. Ask user for their project key (e.g., `PROJ`)
+2. Ask user for their full name, then look up assignee account ID:
+   - MCP tool: `lookupJiraAccountId` with `query: "<user's name>"`
 3. Ask user for component name, then verify it exists:
-   - MCP tool: `searchJiraIssuesUsingJql` with `jql: 'project = AIPDQ AND component = "<name>"'`, `maxResults: 1`
+   - MCP tool: `searchJiraIssuesUsingJql` with `jql: 'project = <KEY> AND component = "<name>"'`, `maxResults: 1`
    - If no results, try partial matches or ask user to correct.
+4. Ask user for their Atlassian base URL (e.g., `https://<org>.atlassian.net`)
 
-### 2. Create or Update JIRA_TODO.md
+### 2. Create `.jira/` Directory and JIRA_TODO.md
 
-After verifying identity, create `JIRA_TODO.md` **in the project root directory** (next to `.gitignore`). This file serves as the local sprint tracker and identity cache.
+After verifying identity, create a `.jira/` directory in the project root and place all Jira-related files there. This keeps Jira artifacts organized and out of the main project tree.
+
+```
+.jira/
+├── JIRA_TODO.md          # Sprint tracker and work instructions
+└── (future: cached responses, reports, etc.)
+```
+
+Create `.jira/JIRA_TODO.md` — this file serves as the local sprint tracker and identity cache.
 
 **File format:**
 
 ```markdown
 # JIRA Sprint TODO
 
-> **Project:** AIPDQ
-> **Assignee:** Afzal Mukhtar (account: <accountId>)
+> **Project:** <PROJECT_KEY>
+> **Assignee:** <User Name> (account: <accountId>)
 > **Component:** <verified component name>
-> **Board:** AI Assistant - Sprint Data
-> **Base URL:** https://cisco-sbg.atlassian.net
+> **Board:** <board name>
+> **Base URL:** <https://org.atlassian.net>
 > **Last synced:** <timestamp>
 
 | Emoji | Meaning | JIRA Statuses |
@@ -69,20 +78,35 @@ After verifying identity, create `JIRA_TODO.md` **in the project root directory*
 
 ---
 
-### [AIPDQ-200](https://cisco-sbg.atlassian.net/browse/AIPDQ-200) Story Title
+### [PROJ-200](https://org.atlassian.net/browse/PROJ-200) Story Title
 
-👨🏻‍💻 [AIPDQ-201](https://cisco-sbg.atlassian.net/browse/AIPDQ-201) Sub-task 1
-📋 [AIPDQ-202](https://cisco-sbg.atlassian.net/browse/AIPDQ-202) Sub-task 2
+> Story description from Jira goes here. Include all context, links,
+> S3 paths, reproduction steps — whatever is in the ticket body.
+> This gives the agent full context without needing to re-fetch.
+>
+> **Reported by:** Person Name | **Comments (3):**
+> - *Alice (2026-02-10):* "Confirmed this also affects other products."
+> - *Bob (2026-02-12):* "Root cause is in the chunker fallback logic."
+> - *Alice (2026-02-14):* "PR #1720 has a proposed fix."
+
+👨🏻‍💻 [PROJ-201](https://org.atlassian.net/browse/PROJ-201) **Sub-task 1**
+> Sub-task description from Jira. Explains what this specific task requires.
+
+📋 [PROJ-202](https://org.atlassian.net/browse/PROJ-202) **Sub-task 2**
+> Sub-task description from Jira.
 
 ### Tasks
 
-📋 [AIPDQ-100](https://cisco-sbg.atlassian.net/browse/AIPDQ-100) Some standalone task
-🔍 [AIPDQ-103](https://cisco-sbg.atlassian.net/browse/AIPDQ-103) PR under review
+📋 [PROJ-100](https://org.atlassian.net/browse/PROJ-100) **Some standalone task**
+> Task description from Jira.
+
+🔍 [PROJ-103](https://org.atlassian.net/browse/PROJ-103) **PR under review**
+> Task description from Jira.
 
 ### Completed
 
-✅ [AIPDQ-300](https://cisco-sbg.atlassian.net/browse/AIPDQ-300) Done task
-❌ [AIPDQ-301](https://cisco-sbg.atlassian.net/browse/AIPDQ-301) Cancelled task
+✅ [PROJ-300](https://org.atlassian.net/browse/PROJ-300) Done task
+❌ [PROJ-301](https://org.atlassian.net/browse/PROJ-301) Cancelled task
 
 ---
 **Progress:** 2/6 done | 1 in progress | 1 in review
@@ -90,11 +114,27 @@ After verifying identity, create `JIRA_TODO.md` **in the project root directory*
 
 The **identity header** (blockquote section) is the source of truth for all subsequent Jira operations. The agent reads this on session start instead of re-asking the user.
 
+**Description & comments enrichment (MANDATORY):** When pulling tickets into JIRA_TODO.md, the agent MUST also fetch and include:
+
+1. **Descriptions** — For every ticket (stories, tasks, AND sub-tasks), fetch the full description using `getJiraIssue` and include it as a blockquote (`>`) directly below the ticket line. This gives the agent full working context without needing to re-fetch from Jira.
+2. **Comments** — For the parent story/task, fetch the latest comments and include them as a bullet list inside the description blockquote. Format: `- *Author (date):* "comment text"`. This captures discussion, decisions, and context from teammates.
+3. **Sub-task titles** — Bold the summary text after the ticket link for scannability.
+
+**How to fetch descriptions:** Use `getJiraIssue` (MCP tool) for each ticket. Parse the `fields.description` (Atlassian Document Format) by recursively extracting `text` nodes. Parse `fields.comment.comments[]` for comment bodies, authors (`author.displayName`), and dates (`created`).
+
+**When descriptions are empty:** If a ticket has no description, write `> (no description)` as a placeholder so the agent knows it checked.
+
+**Why this matters:** Without descriptions in the TODO, the agent has no context about what each ticket requires and cannot work autonomously. The descriptions ARE the work instructions.
+
 **Status emoji rules:** Change an emoji locally, then run `sprint_sync.py` to push the change to Jira. The script detects drift between local emojis and Jira statuses and adds transition comments.
 
 ### 3. Add to .gitignore
 
-Ensure `JIRA_TODO.md` is in the project's `.gitignore`. If not present, append it.
+Ensure `.jira/` is in the project's `.gitignore`. If not present, append it:
+```
+# Jira local data
+.jira/
+```
 
 ---
 
@@ -107,20 +147,20 @@ Ensure `JIRA_TODO.md` is in the project's `.gitignore`. If not present, append i
 
 **ALWAYS apply automatically (do NOT ask):**
 
-- **Project Key**: Read from `JIRA_TODO.md` header, default `AIPDQ`
-- **Assignee**: Always set to Afzal Mukhtar (from cached `accountId`)
-- **Component**: Always set from `JIRA_TODO.md` header (pass via `additional_fields: { "components": [{"name": "<name>"}] }`)
+- **Project Key**: Read from `.jira/JIRA_TODO.md` header
+- **Assignee**: Always set to the user (from cached `accountId` in identity header)
+- **Component**: Always set from `.jira/JIRA_TODO.md` header (pass via `additional_fields: { "components": [{"name": "<name>"}] }`)
 
 **How to create tickets (use existing tools only):**
 
 - **1-4 tickets**: Call MCP `createJiraIssue` directly for each ticket. Pass `projectKey`, `issueTypeName`, `summary`, `description`, `additional_fields` (for component). For sub-tasks, also pass `parent`.
 - **5+ tickets**: Use `batch_create.py` via Shell. Prepare a JSON file with `[{"summary": "...", "description": "..."}]` and run:
   ```bash
-  uv run python scripts/batch/batch_create.py --type Story --project AIPDQ --component "[component]" --assignee "Afzal Mukhtar" --file tickets.json
-  uv run python scripts/batch/batch_create.py --type Sub-task --parent AIPDQ-XXX --project AIPDQ --component "[component]" --assignee "Afzal Mukhtar" --file subtasks.json
+  uv run python scripts/batch/batch_create.py --type Story --project <KEY> --component "<component>" --assignee "<User Name>" --file tickets.json
+  uv run python scripts/batch/batch_create.py --type Sub-task --parent <KEY>-XXX --project <KEY> --component "<component>" --assignee "<User Name>" --file subtasks.json
   ```
 - **Assigning**: The `--assignee` flag looks up the account ID automatically. For MCP `createJiraIssue`, pass `assignee_account_id` directly.
-- **Sprint**: Set via the JIRA board UI or MCP tools if available. Note the sprint in `JIRA_TODO.md`.
+- **Sprint**: Set via the JIRA board UI or MCP tools if available. Note the sprint in `.jira/JIRA_TODO.md`.
 
 **NEVER** write custom Python scripts. Use only MCP tools and the batch scripts provided by this skill.
 
@@ -200,28 +240,28 @@ These scripts connect to the **same MCP server** via `mcp-remote`. They open mul
 
 **Configuration (env vars, not credentials):**
 ```bash
-export JIRA_PROJECT_KEY="AIPDQ"                                    # Default project
-export JIRA_BASE_URL="https://cisco-sbg.atlassian.net"             # For browse URLs
+export JIRA_PROJECT_KEY="<PROJECT_KEY>"                             # Default project
+export JIRA_BASE_URL="<https://org.atlassian.net>"                  # For browse URLs
 ```
 
 ### batch_create.py — Parallel Issue Creation
 
 ```bash
-uv run python scripts/batch/batch_create.py --type Story --component "C3 Docs & Unified Docs ML" --assignee "Afzal Mukhtar" "Implement auth" "Add logging"
+uv run python scripts/batch/batch_create.py --type Story --component "<component>" --assignee "<User Name>" "Implement auth" "Add logging"
 
-uv run python scripts/batch/batch_create.py --type Sub-task --parent AIPDQ-100 --component "C3 Docs & Unified Docs ML" "Unit tests" "Docs"
+uv run python scripts/batch/batch_create.py --type Sub-task --parent <KEY>-100 --component "<component>" "Unit tests" "Docs"
 
-echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin --component "C3 Docs & Unified Docs ML"
+echo '[{"summary":"Task A","description":"Details"}]' | uv run python scripts/batch/batch_create.py --stdin --component "<component>"
 
-uv run python scripts/batch/batch_create.py --file tickets.json --project AIPDQ --component "C3 Docs & Unified Docs ML"
+uv run python scripts/batch/batch_create.py --file tickets.json --project <KEY> --component "<component>"
 ```
 
 ### batch_update.py — Batch Comments
 
 ```bash
-uv run python scripts/batch/batch_update.py --comment "Deployed to staging" AIPDQ-101 AIPDQ-102
+uv run python scripts/batch/batch_update.py --comment "Deployed to staging" <KEY>-101 <KEY>-102
 
-echo -e "AIPDQ-101\nAIPDQ-102" | uv run python scripts/batch/batch_update.py --stdin --comment "Done"
+echo -e "<KEY>-101\n<KEY>-102" | uv run python scripts/batch/batch_update.py --stdin --comment "Done"
 ```
 
 Note: This script only adds comments. For status transitions, use the AI agent's MCP tools directly.
@@ -251,7 +291,7 @@ uv run python scripts/batch/sprint_sync.py --pull-only
 uv run python scripts/batch/sprint_sync.py --push-only
 
 # With explicit component filter (reads from identity header by default)
-uv run python scripts/batch/sprint_sync.py --component "C3 Docs & Unified Docs ML"
+uv run python scripts/batch/sprint_sync.py --component "<component>"
 ```
 
 **How it works:**
@@ -296,13 +336,13 @@ When the user's request matches one of these, **read the sub-skill's SKILL.md an
 
 ### Start of Session
 
-1. Read `JIRA_TODO.md` from the project root to load identity defaults and current ticket statuses
-2. If it doesn't exist, run the Project Initialization workflow (see above)
+1. Read `.jira/JIRA_TODO.md` to load identity defaults and current ticket statuses
+2. If `.jira/` doesn't exist, run the Project Initialization workflow (see above)
 3. Pull latest sprint data (uses component filter from identity header):
 
 ```bash
-export JIRA_PROJECT_KEY="AIPDQ"
-export JIRA_BASE_URL="https://cisco-sbg.atlassian.net"
+export JIRA_PROJECT_KEY="<from identity header>"
+export JIRA_BASE_URL="<from identity header>"
 uv run python scripts/batch/sprint_sync.py --pull-only
 ```
 
@@ -310,8 +350,8 @@ uv run python scripts/batch/sprint_sync.py --pull-only
 - **Search:** MCP `searchJiraIssuesUsingJql`
 - **View:** MCP `getJiraIssue`
 - **Comment:** MCP `addCommentToJiraIssue`
-- **Create:** MCP `createJiraIssue` (always include component from `JIRA_TODO.md`)
-- **Update status:** Edit the emoji in `JIRA_TODO.md` (e.g., 📋 → 👨🏻‍💻 when starting work)
+- **Create:** MCP `createJiraIssue` (always include component from `.jira/JIRA_TODO.md`)
+- **Update status:** Edit the emoji in `.jira/JIRA_TODO.md` (e.g., 📋 → 👨🏻‍💻 when starting work)
 
 ### End of Session
 
@@ -328,28 +368,45 @@ When the user asks to sync Jira (e.g., "sync my tickets", "what's on my plate?",
 
 ### 1. Understand Project Context
 
-Before syncing, read the project's `JIRA_TODO.md` identity header for Project, Component, and Assignee. If no `JIRA_TODO.md` exists, run Project Initialization first.
+Before syncing, read the project's `.jira/JIRA_TODO.md` identity header for Project, Component, and Assignee. If `.jira/` doesn't exist, run Project Initialization first.
 
 The **Component** field is the primary filter for keeping the TODO relevant to the current codebase. If unsure, also check the project's README, `package.json`, or `pyproject.toml` to understand what component/area this project covers.
 
 ### 2. Pull from Jira
 
 ```bash
-export JIRA_PROJECT_KEY="AIPDQ"
-export JIRA_BASE_URL="https://cisco-sbg.atlassian.net"
+export JIRA_PROJECT_KEY="<from identity header>"
+export JIRA_BASE_URL="<from identity header>"
 uv run python scripts/batch/sprint_sync.py --pull-only
 ```
 
-The script fetches tickets matching: `project = AIPDQ AND assignee = currentUser() AND sprint in openSprints() AND component = "<from identity header>"`.
+The script fetches tickets matching: `project = <KEY> AND assignee = currentUser() AND sprint in openSprints() AND component = "<from identity header>"`.
 
-### 3. Review and Curate
+### 3. Enrich with Descriptions & Comments
 
-After pulling, review the generated JIRA_TODO.md. The agent should:
+After pulling ticket keys and statuses, the agent MUST enrich each ticket with its full description and comments before writing JIRA_TODO.md:
+
+1. For each ticket key, call `getJiraIssue` via MCP (or use `mcp_client.py` directly):
+   ```python
+   result = await ctx.call('getJiraIssue', cloudId=cid, issueIdOrKey='<KEY>-XXX')
+   description = extract_text(result['fields']['description'])
+   comments = result['fields'].get('comment', {}).get('comments', [])
+   ```
+2. Extract description text by recursively collecting `text` nodes from the Atlassian Document Format (ADF) tree.
+3. Extract comments: author (`comment['author']['displayName']`), date (`comment['created']`), body (same ADF text extraction).
+4. Write the description as a blockquote under each ticket line in JIRA_TODO.md.
+5. For parent stories, append the latest comments as a bullet list inside the blockquote.
+
+This step is **not optional** — it is what makes the TODO actionable for the agent and the developer.
+
+### 4. Review and Curate
+
+After enriching, review the generated JIRA_TODO.md. The agent should:
 - Verify the pulled tickets are relevant to the current codebase
 - Remove any that clearly belong to a different project area
 - Add context notes if helpful
 
-### 4. Push Local Changes
+### 5. Push Local Changes
 
 When the user changes emojis in JIRA_TODO.md (e.g., moves 📋 → 👨🏻‍💻 to mark a ticket as started):
 
@@ -370,7 +427,7 @@ Key rules:
 - The **emoji legend table** maps each emoji to its JIRA status counterparts
 - Each ticket line starts with a status emoji: 📋 👨🏻‍💻 🔍 ⏳ ✅ ❌
 - Change an emoji locally → run `sprint_sync.py` → the script pushes the change to Jira
-- The file lives in the **project root** and must be in `.gitignore`
+- The file lives in the **`.jira/` directory** in the project root, and `.jira/` must be in `.gitignore`
 
 ---
 
