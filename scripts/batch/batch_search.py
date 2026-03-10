@@ -59,7 +59,7 @@ async def main() -> None:
             {
                 "cloudId": cid,
                 "jql": jql,
-                "fields": ["key", "summary", "status", "issuetype", "priority", "assignee"],
+                "fields": ["key", "summary", "status", "issuetype", "priority", "assignee", "resolutiondate", "created"],
                 "maxResults": args.max_results,
             }
             for jql in resolved
@@ -82,6 +82,8 @@ async def main() -> None:
                     "type": f.get("issuetype", {}).get("name", ""),
                     "priority": f.get("priority", {}).get("name", ""),
                     "assignee": (f.get("assignee") or {}).get("displayName", "Unassigned"),
+                    "resolutiondate": (f.get("resolutiondate") or "")[:10],
+                    "created": (f.get("created") or "")[:10],
                 })
             results.append({
                 "jql": jql,
