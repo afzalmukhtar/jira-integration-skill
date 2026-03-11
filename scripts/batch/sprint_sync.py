@@ -148,7 +148,7 @@ async def pull_sprint_tickets(
         "searchJiraIssuesUsingJql",
         cloudId=cid, jql=jql,
         fields=["key", "summary", "status", "issuetype", "parent"],
-        maxResults=200,
+        maxResults=100,
     )
     return data.get("issues", []) if isinstance(data, dict) else []
 
@@ -308,7 +308,7 @@ async def main() -> None:
             if args.push_only:
                 return
 
-        print(f"\n=== Pull: Fetching sprint tickets from Jira ===")
+        print("\n=== Pull: Fetching sprint tickets from Jira ===")
         if component_filter:
             print(f"  Filtering by component: {component_filter}")
         issues = await pull_sprint_tickets(pool, cid, project_key, component_filter)
