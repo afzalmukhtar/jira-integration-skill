@@ -18,7 +18,7 @@ Automatically extract action items from meeting notes and create Jira tasks with
 
 **Batch alternative:** For 5+ tickets, use `scripts/batch/batch_create.py` for parallel creation.
 
-**Project defaults:** Read from `JIRA_TODO.md` identity header in the project root. The header contains Project, Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
+**Project defaults:** Read from `.jira/JIRA_TODO.md` identity header in the project root. The header contains Cloud ID, Project, Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
 
 ---
 
@@ -77,10 +77,11 @@ For each action item, extract:
 
 ### Step 3: Load Project Defaults
 
-Read `JIRA_TODO.md` from the project root to get the identity header. Extract:
-- **Project key** (default: `AIPDQ`)
+Read `.jira/JIRA_TODO.md` from the project root to get the identity header. Extract:
+- **Cloud ID** (for every MCP call)
+- **Project key** (from header)
 - **Component name** (for `additional_fields`)
-- **Assignee account ID** (for the default assignee — Afzal Mukhtar)
+- **Assignee account ID** (for the default assignee)
 - **Base URL** (for browse links in the summary)
 
 If `JIRA_TODO.md` doesn't exist, follow the initialization workflow in the main SKILL.md to create it first.
@@ -89,7 +90,7 @@ If `JIRA_TODO.md` doesn't exist, follow the initialization workflow in the main 
 
 For each unique assignee name, find their Jira account ID via MCP:
 ```
-lookupJiraAccountId(cloudId="...", searchString="[assignee name]")
+lookupJiraAccountId(cloudId="<from JIRA_TODO.md>", searchString="[assignee name]")
 ```
 
 **Handle results:**
@@ -125,8 +126,8 @@ Would you like me to:
 **For 1-4 tasks:** Use MCP tool `createJiraIssue` for each. Always include the component from defaults:
 ```
 createJiraIssue(
-  cloudId="...",
-  projectKey="AIPDQ",
+  cloudId="<from JIRA_TODO.md>",
+  projectKey="<PROJECT_KEY>",
   issueTypeName="Task",
   summary="[Task description]",
   description="[Context from meeting]",
@@ -137,7 +138,7 @@ createJiraIssue(
 
 **For 5+ tasks:** Use batch script with component and assignee flags:
 ```bash
-uv run python scripts/batch/batch_create.py --type Task --project AIPDQ --component "[component]" --assignee "[assignee]" "Task 1" "Task 2" "Task 3" "Task 4" "Task 5"
+uv run python scripts/batch/batch_create.py --type Task --project <PROJECT_KEY> --component "[component]" --assignee "[assignee]" "Task 1" "Task 2" "Task 3" "Task 4" "Task 5"
 ```
 
 **Task description format:**

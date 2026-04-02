@@ -20,6 +20,7 @@ These defaults apply to **every** Jira operation unless the user explicitly over
 
 | Setting | Default | Notes |
 |---------|---------|-------|
+| **Cloud ID** | *(auto-discovered)* | Required for every MCP call. Discovered via `getAccessibleAtlassianResources` on first interaction and cached in `JIRA_TODO.md` header. |
 | **Project Key** | *(ask user)* | Always verify with user on first interaction: "What is your Jira project key?" |
 | **Assignee** | *(current user)* | Always assign all created tickets to the current user. Look up `accountId` via `lookupJiraAccountId` with the user's name. |
 | **Component** | *(must be verified)* | Ask user for the component name on first interaction, then verify it exists by searching for an existing issue with that component. Cache the verified name for the session. |
@@ -35,13 +36,14 @@ On the **first Jira interaction in a project**, perform these steps:
 
 Use the existing MCP tools — do NOT write custom scripts.
 
-1. Ask user for their project key (e.g., `PROJ`)
-2. Ask user for their full name, then look up assignee account ID:
-   - MCP tool: `lookupJiraAccountId` with `query: "<user's name>"`
-3. Ask user for component name, then verify it exists:
-   - MCP tool: `searchJiraIssuesUsingJql` with `jql: 'project = <KEY> AND component = "<name>"'`, `maxResults: 1`
+1. **Discover Cloud ID** — call `getAccessibleAtlassianResources` (no params). The response contains a list of Atlassian sites; pick the relevant one and extract its `id` (UUID). This is the `cloudId` required by every subsequent MCP call.
+2. Ask user for their project key (e.g., `PROJ`)
+3. Ask user for their full name, then look up assignee account ID:
+   - MCP tool: `lookupJiraAccountId` with `cloudId` and `query: "<user's name>"`
+4. Ask user for component name, then verify it exists:
+   - MCP tool: `searchJiraIssuesUsingJql` with `cloudId` and `jql: 'project = <KEY> AND component = "<name>"'`, `maxResults: 1`
    - If no results, try partial matches or ask user to correct.
-4. Ask user for their Atlassian base URL (e.g., `https://<org>.atlassian.net`)
+5. Ask user for their Atlassian base URL (e.g., `https://<org>.atlassian.net`)
 
 ### 2. Create `.jira/` Directory and JIRA_TODO.md
 
@@ -60,11 +62,12 @@ Create `.jira/JIRA_TODO.md` — this file serves as the local sprint tracker and
 ```markdown
 # JIRA Sprint TODO
 
+> **Cloud ID:** <cloudId UUID from getAccessibleAtlassianResources>
 > **Project:** <PROJECT_KEY>
 > **Assignee:** <User Name> (account: <accountId>)
 > **Component:** <verified component name>
 > **Board:** <board name>
-> **Base URL:** <https://org.atlassian.net>
+> **Base URL:** <https://your-org.atlassian.net>
 > **Last synced:** <timestamp>
 
 | Emoji | Meaning | JIRA Statuses |
@@ -166,6 +169,108 @@ Ensure `.jira/` is in the project's `.gitignore`. If not present, append it:
 
 ---
 
+## Sprint Management
+
+### Finding the Active Sprint
+
+Use JQL to discover the active sprint for your project:
+```
+project = <PROJECT_KEY> AND sprint in openSprints()
+```
+
+The sprint name and numeric ID appear in each issue's `fields.sprint` object in the response. Cache the sprint ID for subsequent operations.
+
+### Moving Tickets to a Sprint
+
+Use `editJiraIssue` with the sprint custom field:
+```
+editJiraIssue(
+  cloudId="<cloudId>",
+  issueIdOrKey="PROJ-101",
+  fields={"customfield_10020": 12345}
+)
+```
+
+**Important notes:**
+- The sprint field is `customfield_10020` in standard Jira Cloud. Some organizations may use a different field name — check via `getJiraIssueTypeMetaWithFields` if the default doesn't work.
+- The value MUST be a raw integer (the sprint ID), not an object like `{"id": 12345}`. Jira will reject with `Number value expected as the Sprint id`.
+
+### Sub-Task Sprint Inheritance
+
+Sub-tasks **cannot** be assigned to a sprint directly. They inherit the sprint from their parent story or task. If you try, Jira rejects with:
+
+> *"subtasks cannot be associated to a sprint. It's associated to the same sprint as its parent."*
+
+To move sub-tasks: move their **parent** story/task to the target sprint. All sub-tasks follow automatically.
+
+### Bulk Sprint Assignment
+
+For moving 3+ tickets to a sprint:
+1. Identify which tickets are parent stories/tasks (skip sub-tasks — they inherit)
+2. Call `editJiraIssue` for each parent with `fields: {"customfield_10020": <sprint_id>}`
+3. Sub-tasks will follow their parents automatically
+
+---
+
+## Status Transitions
+
+### Two-Step Pattern
+
+Transition IDs are project-specific and workflow-dependent. "In Progress" might be `id: "21"` in one project and `id: "31"` in another. Always discover the available transitions first.
+
+**Step 1** — Get available transitions:
+```
+getTransitionsForJiraIssue(cloudId="<cloudId>", issueIdOrKey="PROJ-101")
+```
+Returns `transitions[]` where each entry has `id` (string) and `name` (e.g. "In Progress", "Done", "Closed").
+
+**Step 2** — Execute the transition:
+```
+transitionJiraIssue(
+  cloudId="<cloudId>",
+  issueIdOrKey="PROJ-101",
+  transition={"id": "31"}
+)
+```
+
+### Batch Transitions
+
+Use `batch_transition.py` for transitioning multiple tickets at once:
+```bash
+# Transition tickets to Done:
+uv run python scripts/batch/batch_transition.py --status "Done" PROJ-101 PROJ-102 PROJ-103
+
+# List available transitions for a ticket (useful for discovery):
+uv run python scripts/batch/batch_transition.py --list-transitions PROJ-101
+```
+
+The script handles the two-step pattern internally — it discovers the matching transition ID by name, then executes it.
+
+### When to Use Direct MCP vs sprint_sync.py
+
+- **Direct MCP** (`transitionJiraIssue`): When you need an immediate status change in Jira (e.g., closing a ticket after testing).
+- **sprint_sync.py**: When you change emojis in `JIRA_TODO.md` and want to push the drift to Jira as transition comments. The sync script detects local emoji changes and reconciles them.
+
+---
+
+## Issue Linking
+
+Link related issues using `createIssueLink`:
+```
+createIssueLink(
+  cloudId="<cloudId>",
+  inwardIssue="PROJ-200",
+  outwardIssue="PROJ-101",
+  type="Blocks"
+)
+```
+
+**Direction matters.** For directional link types: `inwardIssue` is the source, `outwardIssue` is the target. For "A is blocked by B": `inwardIssue: "B"`, `outwardIssue: "A"`.
+
+Common link types: `"Blocks"`, `"Duplicates"`, `"Relates"`, `"Clones"`. Call `getIssueLinkTypes` to discover all available types for your project.
+
+---
+
 ## Routing Table
 
 Use this table to decide which tool or sub-skill to invoke:
@@ -176,8 +281,14 @@ Use this table to decide which tool or sub-skill to invoke:
 | View one issue | MCP `getJiraIssue` | Direct MCP call |
 | Create 1-4 issues | MCP `createJiraIssue` | Direct MCP call per issue |
 | Create 5+ issues | `scripts/batch/batch_create.py` | Shell: run Python script |
+| Update fields on an issue | MCP `editJiraIssue` | Direct MCP call |
 | Add comment to 1-2 issues | MCP `addCommentToJiraIssue` | Direct MCP call |
 | Add comment to 3+ issues | `scripts/batch/batch_update.py` | Shell: run Python script |
+| Transition 1-2 issues | MCP `getTransitionsForJiraIssue` + `transitionJiraIssue` | Two-step MCP call |
+| Transition 3+ issues | `scripts/batch/batch_transition.py` | Shell: run Python script |
+| List available transitions | `batch_transition.py --list-transitions` | Shell: run Python script |
+| Move tickets to sprint | MCP `editJiraIssue` with `customfield_10020` | See Sprint Management section |
+| Link two issues | MCP `createIssueLink` | Direct MCP call |
 | Run multiple JQL queries | `scripts/batch/batch_search.py` | Shell: run Python script |
 | Sync Jira / "what's on my plate?" | **Smart Sync Workflow** (see below) | Agent workflow + `sprint_sync.py` |
 | Sprint sync (JIRA_TODO.md) | `scripts/batch/sprint_sync.py` | Shell: run Python script |
@@ -218,17 +329,27 @@ Configured via `.mcp.json`:
 
 ### Available MCP Tools
 
-| Tool | Purpose |
-|------|---------|
-| `searchJiraIssuesUsingJql` | Search issues with JQL |
-| `getJiraIssue` | Get full issue details |
-| `createJiraIssue` | Create a new issue |
-| `addCommentToJiraIssue` | Add comment to issue |
-| `getVisibleJiraProjects` | List accessible projects |
-| `getJiraProjectIssueTypesMetadata` | Get issue types for a project |
-| `getJiraIssueTypeMetaWithFields` | Get required fields for an issue type |
-| `lookupJiraAccountId` | Find user by name/email |
-| `getAccessibleAtlassianResources` | List connected Atlassian sites |
+Every tool below requires `cloudId` (from the identity header) unless noted otherwise.
+
+| Tool | Purpose | Key Params |
+|------|---------|------------|
+| `searchJiraIssuesUsingJql` | Search issues with JQL | `jql`, `fields`, `maxResults` |
+| `getJiraIssue` | Get full issue details | `issueIdOrKey` |
+| `createJiraIssue` | Create a new issue | `projectKey`, `issueTypeName`, `summary`, `description`, `additional_fields` |
+| `editJiraIssue` | Update fields on an existing issue | `issueIdOrKey`, `fields` (object, e.g. `{"summary": "new title"}`) |
+| `transitionJiraIssue` | Change issue status | `issueIdOrKey`, `transition: {"id": "<string>"}` — call `getTransitionsForJiraIssue` first |
+| `getTransitionsForJiraIssue` | List available status transitions | `issueIdOrKey` — returns `transitions[]` with `id` and `name` |
+| `addCommentToJiraIssue` | Add comment to issue | `issueIdOrKey`, `commentBody` |
+| `createIssueLink` | Link two issues | `inwardIssue`, `outwardIssue`, `type` (e.g. "Blocks", "Duplicates") |
+| `getIssueLinkTypes` | List available link type names | *(no issue-specific params)* |
+| `addWorklogToJiraIssue` | Log time against an issue | `issueIdOrKey` |
+| `getJiraIssueRemoteIssueLinks` | Get remote links on an issue | `issueIdOrKey` |
+| `getVisibleJiraProjects` | List accessible projects | — |
+| `getJiraProjectIssueTypesMetadata` | Get issue types for a project | `projectKeyOrId` |
+| `getJiraIssueTypeMetaWithFields` | Get required fields for an issue type | `projectKeyOrId`, `issueTypeId` |
+| `lookupJiraAccountId` | Find user by name/email | `query` |
+| `getAccessibleAtlassianResources` | List connected Atlassian sites (get `cloudId`) | *(no cloudId needed)* |
+| `atlassianUserInfo` | Get current authenticated user info | *(no params)* |
 
 ---
 
@@ -264,7 +385,22 @@ uv run python scripts/batch/batch_update.py --comment "Deployed to staging" <KEY
 echo -e "<KEY>-101\n<KEY>-102" | uv run python scripts/batch/batch_update.py --stdin --comment "Done"
 ```
 
-Note: This script only adds comments. For status transitions, use the AI agent's MCP tools directly.
+Note: This script only adds comments. For status transitions, use `batch_transition.py` or MCP tools directly.
+
+### batch_transition.py — Batch Status Transitions
+
+```bash
+# Transition multiple tickets to a target status:
+uv run python scripts/batch/batch_transition.py --status "Done" <KEY>-101 <KEY>-102 <KEY>-103
+
+# List available transitions for a ticket (discovery):
+uv run python scripts/batch/batch_transition.py --list-transitions <KEY>-101
+
+# Control parallelism:
+uv run python scripts/batch/batch_transition.py --status "In Progress" --concurrency 5 <KEY>-101 <KEY>-102
+```
+
+The script handles the two-step transition pattern internally: discovers the matching transition ID by name (case-insensitive), then executes it. If no matching transition exists, it reports available options.
 
 ### batch_search.py — Concurrent JQL Queries
 
@@ -355,10 +491,18 @@ uv run python scripts/batch/sprint_sync.py --pull-only
 
 ### End of Session
 
-Push any local status changes and pull latest from Jira:
+1. Push any local status changes and pull latest from Jira:
 ```bash
 uv run python scripts/batch/sprint_sync.py
 ```
+
+2. **Cross-post to GitHub** (if the work is tied to a PR): post a summary comment referencing the Jira ticket key for traceability:
+```bash
+gh pr comment <PR_NUMBER> --body "## Summary\n\n<work summary>\n\nJira: <PROJECT_KEY>-XXX"
+```
+This keeps both Jira and GitHub in sync without manual copy-paste.
+
+3. **Clean up JIRA_TODO.md** — move any newly completed tickets to the Completed section and update the progress line (see "Maintaining JIRA_TODO.md").
 
 ---
 
@@ -431,6 +575,38 @@ Key rules:
 
 ---
 
+## Maintaining JIRA_TODO.md
+
+### Cleaning Up Completed Tickets
+
+When a ticket is Closed or Done in Jira:
+
+1. **Verify first** — confirm the status in Jira via `searchJiraIssuesUsingJql` or `getJiraIssue` before removing locally.
+2. **Remove** from its active section (In Progress, Code Review, To Do).
+3. **Add a one-liner** to the "Completed" section at the bottom of the file with the ticket key, summary, and a brief note if useful.
+
+Completed tickets older than 1 sprint can be removed entirely to keep the file focused.
+
+### Updating the Progress Line
+
+The last line of `JIRA_TODO.md` is a progress summary. Update it whenever tickets move:
+```markdown
+**Progress:** 3/10 done | 2 in progress | 1 in review | 4 to do
+```
+
+### Sprint Rollover
+
+When a new sprint starts:
+1. Move all items from "Completed" to a "Completed (Previous Sprint)" heading, or remove them.
+2. Run `sprint_sync.py --pull-only` to fetch the new sprint's tickets.
+3. Re-enrich with descriptions and comments.
+
+### Handling Parent Tickets with All Sub-Tasks Done
+
+When all sub-tasks under a parent story are closed but the parent itself is still open (e.g., waiting for PR merge), keep the parent in its current section. Add a note like `> All N sub-tasks closed.` to signal the parent is ready for its final transition.
+
+---
+
 ## Error Handling
 
 | Error | Cause | Fix |
@@ -439,3 +615,9 @@ Key rules:
 | `No accessible Atlassian resources` | OAuth not completed | Run any batch script to trigger browser login |
 | `Components is required` | Missing required field | Use `additional_fields` in `createJiraIssue` |
 | Rate limit (429) | Too many requests | Reduce `--concurrency` on batch scripts |
+| `Number value expected as the Sprint id` | Sprint field expects raw integer | Pass `{"customfield_10020": 12345}` not `{"customfield_10020": {"id": 12345}}` |
+| `subtasks cannot be associated to a sprint` | Sub-tasks inherit sprint from parent | Move the parent story/task instead; sub-tasks follow automatically |
+| `Unterminated string in JSON` | Malformed MCP arguments | Check quoting in `fields` object; ensure valid JSON |
+| `Error: Aborted` | Transient MCP failure | Retry the call; these are intermittent |
+| `No transition named 'X'` | Transition name doesn't match | Call `getTransitionsForJiraIssue` (or `--list-transitions`) to see valid names |
+| `Issue does not exist or you do not have permission` | Wrong key or cloudId | Verify issue key spelling and that cloudId matches the correct Atlassian site |

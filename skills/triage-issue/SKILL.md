@@ -16,7 +16,7 @@ Automatically triage bug reports and error messages by searching Jira for duplic
 
 **Primary tools:** Atlassian MCP tools (`searchJiraIssuesUsingJql`, `createJiraIssue`, `addCommentToJiraIssue`, `getJiraIssue`)
 
-**Project defaults:** Read from `JIRA_TODO.md` identity header in the project root. The header contains Project (default: `AIPDQ`), Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
+**Project defaults:** Read from `.jira/JIRA_TODO.md` identity header in the project root. The header contains Cloud ID, Project, Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
 
 ---
 
@@ -37,8 +37,8 @@ Execute **multiple targeted searches** via MCP to catch duplicates:
 **Search 1: Error-focused**
 ```
 searchJiraIssuesUsingJql(
-  cloudId="...",
-  jql='project = AIPDQ AND text ~ "error signature" AND type = Bug ORDER BY created DESC',
+  cloudId="<from JIRA_TODO.md>",
+  jql='project = <PROJECT_KEY> AND text ~ "error signature" AND type = Bug ORDER BY created DESC',
   fields=["summary","description","status","resolution","assignee"],
   maxResults=20
 )
@@ -47,8 +47,8 @@ searchJiraIssuesUsingJql(
 **Search 2: Component-focused**
 ```
 searchJiraIssuesUsingJql(
-  cloudId="...",
-  jql='project = AIPDQ AND text ~ "component keywords" AND type = Bug ORDER BY updated DESC',
+  cloudId="<from JIRA_TODO.md>",
+  jql='project = <PROJECT_KEY> AND text ~ "component keywords" AND type = Bug ORDER BY updated DESC',
   fields=["summary","description","status","resolution","assignee"],
   maxResults=20
 )
@@ -57,8 +57,8 @@ searchJiraIssuesUsingJql(
 **Search 3: Symptom-focused**
 ```
 searchJiraIssuesUsingJql(
-  cloudId="...",
-  jql='project = AIPDQ AND summary ~ "symptom keywords" ORDER BY priority DESC',
+  cloudId="<from JIRA_TODO.md>",
+  jql='project = <PROJECT_KEY> AND summary ~ "symptom keywords" ORDER BY priority DESC',
   fields=["summary","description","status","resolution","assignee"],
   maxResults=20
 )
@@ -108,7 +108,7 @@ No similar issues found. Would you like me to create a new bug ticket?
 **Option A: Add Comment to Existing Issue**
 ```
 addCommentToJiraIssue(
-  cloudId="...",
+  cloudId="<from JIRA_TODO.md>",
   issueIdOrKey="PROJ-456",
   commentBody="## Additional Instance Reported\n\n**Error Details:**\n[error details]\n\n**Context:**\n[environment, impact]\n\n---\n*Added via triage*"
 )
@@ -116,11 +116,11 @@ addCommentToJiraIssue(
 
 **Option B: Create New Issue**
 
-Create with project defaults (component, assignee from `JIRA_TODO.md`):
+Create with project defaults (component, assignee from `.jira/JIRA_TODO.md`):
 ```
 createJiraIssue(
-  cloudId="...",
-  projectKey="AIPDQ",
+  cloudId="<from JIRA_TODO.md>",
+  projectKey="<PROJECT_KEY>",
   issueTypeName="Bug",
   summary="[Component]: [Error Type] - [Brief Symptom]",
   description="[structured description]",

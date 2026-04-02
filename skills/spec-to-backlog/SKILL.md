@@ -15,7 +15,7 @@ Transform specification documents into structured Jira backlogs automatically. T
 
 **Batch alternative:** For 5+ child tickets, use `scripts/batch/batch_create.py` for parallel creation.
 
-**Project defaults:** Read from `JIRA_TODO.md` identity header in the project root. The header contains Project, Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
+**Project defaults:** Read from `.jira/JIRA_TODO.md` identity header in the project root. The header contains Cloud ID, Project, Assignee, Component, Board, and Base URL. Do NOT ask the user for these — they are already cached.
 
 ---
 
@@ -47,8 +47,9 @@ If user provides a file path, read it. If user pastes text, use as-is.
 
 ## Step 2: Load Project Defaults
 
-Read `JIRA_TODO.md` from the project root to get the identity header. Extract:
-- **Project key** (default: `AIPDQ`)
+Read `.jira/JIRA_TODO.md` from the project root to get the identity header. Extract:
+- **Cloud ID** (for every MCP call)
+- **Project key** (from header)
 - **Component name** (for `additional_fields`)
 - **Assignee account ID** (for the default assignee)
 - **Base URL** (for browse links in the summary)
@@ -110,8 +111,8 @@ Shall I create these tickets in [PROJECT KEY]?
 Create the Epic via MCP. Always include component from defaults:
 ```
 createJiraIssue(
-  cloudId="...",
-  projectKey="AIPDQ",
+  cloudId="<from JIRA_TODO.md>",
+  projectKey="<PROJECT_KEY>",
   issueTypeName="Epic",
   summary="[Epic Summary]",
   description="[Epic Description]",
@@ -145,12 +146,12 @@ createJiraIssue(
 **For 1-4 tickets:** Use MCP `createJiraIssue` for each. Always include component:
 ```
 createJiraIssue(
-  cloudId="...",
-  projectKey="AIPDQ",
+  cloudId="<from JIRA_TODO.md>",
+  projectKey="<PROJECT_KEY>",
   issueTypeName="[Story/Task/Bug]",
   summary="[Task Summary]",
   description="[Task Description]",
-  parent="AIPDQ-123",
+  parent="<EPIC_KEY>",
   additional_fields={"components": [{"name": "[component from JIRA_TODO.md]"}]}
 )
 ```
@@ -160,7 +161,7 @@ createJiraIssue(
 echo '[
   {"summary": "Implement user registration API", "description": "..."},
   {"summary": "Build login form UI", "description": "..."}
-]' | uv run python scripts/batch/batch_create.py --stdin --type Story --parent AIPDQ-123 --project AIPDQ --component "[component]" --assignee "[assignee]"
+]' | uv run python scripts/batch/batch_create.py --stdin --type Story --parent <EPIC_KEY> --project <PROJECT_KEY> --component "[component]" --assignee "[assignee]"
 ```
 
 **Task Description Structure:**

@@ -77,7 +77,22 @@ uv run python scripts/batch/batch_update.py --comment "Deployed to staging" PROJ
 echo -e "PROJ-101\nPROJ-102" | uv run python scripts/batch/batch_update.py --stdin --comment "Done"
 ```
 
-For status transitions, use the AI agent directly: "Transition PROJ-101, PROJ-102 to Done."
+For status transitions, use `batch_transition.py` below.
+
+### Batch Transition
+
+```bash
+# Transition tickets to Done
+uv run python scripts/batch/batch_transition.py --status "Done" PROJ-101 PROJ-102 PROJ-103
+
+# List available transitions for a ticket (discovery)
+uv run python scripts/batch/batch_transition.py --list-transitions PROJ-101
+
+# Control parallelism
+uv run python scripts/batch/batch_transition.py --status "In Progress" --concurrency 5 PROJ-101 PROJ-102
+```
+
+The script handles the two-step transition pattern internally: discovers the matching transition ID by name (case-insensitive), then executes it.
 
 ### Batch Search
 
@@ -178,12 +193,19 @@ Each skill directory contains a `SKILL.md` with full workflow documentation. The
 | `searchJiraIssuesUsingJql` | Search issues with JQL |
 | `getJiraIssue` | Get full issue details |
 | `createJiraIssue` | Create a new issue |
+| `editJiraIssue` | Update fields on an existing issue |
+| `transitionJiraIssue` | Change issue status |
+| `getTransitionsForJiraIssue` | List available status transitions |
 | `addCommentToJiraIssue` | Add comment to issue |
+| `createIssueLink` | Link two issues |
+| `getIssueLinkTypes` | List available link type names |
+| `addWorklogToJiraIssue` | Log time against an issue |
 | `getVisibleJiraProjects` | List accessible projects |
 | `getJiraProjectIssueTypesMetadata` | Get issue types for a project |
 | `getJiraIssueTypeMetaWithFields` | Get required fields for an issue type |
 | `lookupJiraAccountId` | Find user by name/email |
 | `getAccessibleAtlassianResources` | List connected Atlassian sites |
+| `atlassianUserInfo` | Get current authenticated user info |
 
 ## Architecture
 

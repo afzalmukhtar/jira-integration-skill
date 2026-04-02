@@ -308,7 +308,7 @@ async def main() -> None:
             if args.push_only:
                 return
 
-        print("\n=== Pull: Fetching sprint tickets from Jira ===")
+        print(f"\n=== Pull: Fetching sprint tickets from Jira ===")
         if component_filter:
             print(f"  Filtering by component: {component_filter}")
         issues = await pull_sprint_tickets(pool, cid, project_key, component_filter)
